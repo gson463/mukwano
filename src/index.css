@@ -1,0 +1,97 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 222.2 84% 4.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 222.2 84% 4.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222.2 84% 4.9%;
+    /* Brand: green (not shadcn default blue). Used by `primary` in Tailwind, Button default, focus rings, etc. */
+    --primary: 142.1 64% 33%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 210 40% 96.1%;
+    --secondary-foreground: 222.2 47.4% 11.2%;
+    --muted: 210 40% 96.1%;
+    --muted-foreground: 215.4 16.3% 46.9%;
+    --accent: 210 40% 96.1%;
+    --accent-foreground: 222.2 47.4% 11.2%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 214.3 31.8% 91.4%;
+    --input: 214.3 31.8% 91.4%;
+    --ring: 142.1 64% 33%;
+    --radius: 0.5rem;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  }
+}
+
+@layer utilities {
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+}
+
+@layer components {
+  @keyframes login-orb-drift {
+    0%,
+    100% {
+      transform: translate(0, 0) scale(1);
+    }
+    33% {
+      transform: translate(8%, -6%) scale(1.05);
+    }
+    66% {
+      transform: translate(-4%, 4%) scale(0.98);
+    }
+  }
+  @keyframes login-shimmer {
+    0% {
+      transform: translateX(-100%);
+    }
+    100% {
+      transform: translateX(300%);
+    }
+  }
+  @keyframes login-glow-breathe {
+    0%,
+    100% {
+      opacity: 0.35;
+    }
+    50% {
+      opacity: 0.6;
+    }
+  }
+  .login-animate-orb {
+    animation: login-orb-drift 16s ease-in-out infinite;
+  }
+  .login-animate-orb-slow {
+    animation: login-orb-drift 22s ease-in-out infinite reverse;
+  }
+  .login-animate-glow {
+    animation: login-glow-breathe 5s ease-in-out infinite;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .login-animate-orb,
+    .login-animate-orb-slow,
+    .login-animate-glow {
+      animation: none;
+    }
+  }
+}

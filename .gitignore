@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+
+# Build
+dist/
+
+# Env & local
+.env
+.env.*
+!.env.example
+
+# Logs & OS
+*.log
+.DS_Store
+
+# Editor
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Vite
+*.local
+
+# Supabase local CLI
+supabase/.temp/
