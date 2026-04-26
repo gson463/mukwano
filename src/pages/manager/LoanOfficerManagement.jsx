@@ -33,6 +33,22 @@ import {
 import { DEFAULT_TABLE_PAGE_SIZE, getTotalPages, slicePage } from '@/lib/tablePagination';
 import { TablePaginationBar } from '@/components/table/TablePaginationBar';
 
+/** JWT metadata is not always in sync with public.users; managers still need a stable branch for this page. */
+async function getManagerBranchId(user) {
+  const fromMeta = user?.user_metadata?.branch_id;
+  if (fromMeta) return fromMeta;
+  const { data: profile, error } = await supabase
+    .from('users')
+    .select('branch_id')
+    .eq('id', user.id)
+    .maybeSingle();
+  if (error) {
+    console.error(error);
+    return null;
+  }
+  return profile?.branch_id ?? null;
+}
+
 const LoanOfficerManagement = () => {
   const { user } = useAuth();
   const { toast } = useToast();
@@ -40,6 +56,7 @@ const LoanOfficerManagement = () => {
   const [officers, setOfficers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [noBranchForManager, setNoBranchForManager] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingOfficer, setEditingOfficer] = useState(null);
   const [formData, setFormData] = useState({ full_name: '', email: '', password: '' });
@@ -47,14 +64,28 @@ const LoanOfficerManagement = () => {
   const [currentPage, setCurrentPage] = useState(1);
 
   const fetchOfficers = useCallback(async () => {
-    if (!user || !user.user_metadata.branch_id) return;
+    if (!user) {
+      setOfficers([]);
+      setNoBranchForManager(false);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
+    setNoBranchForManager(false);
+
+    const branchId = await getManagerBranchId(user);
+    if (!branchId) {
+      setOfficers([]);
+      setNoBranchForManager(true);
+      setLoading(false);
+      return;
+    }
 
     const { data, error } = await supabase
       .from('users')
       .select('*')
       .eq('role', 'officer')
-      .eq('branch_id', user.user_metadata.branch_id);
+      .eq('branch_id', branchId);
 
     if (error) {
       toast({ title: 'Error', description: 'Failed to fetch loan officers.', variant: 'destructive' });
@@ -137,11 +168,21 @@ const LoanOfficerManagement = () => {
         setSaving(false);
         return;
       }
+      const branchId = await getManagerBranchId(user);
+      if (!branchId) {
+        toast({
+          title: 'Error',
+          description: 'Your account is not linked to a branch. Ask an administrator to assign you to a branch.',
+          variant: 'destructive',
+        });
+        setSaving(false);
+        return;
+      }
       const { error: invokeError } = await supabase.functions.invoke('create-user', {
         body: {
           ...formData,
           role: 'officer',
-          branch_id: user.user_metadata.branch_id,
+          branch_id: branchId,
         },
       });
       error = invokeError;
@@ -181,7 +222,7 @@ const LoanOfficerManagement = () => {
   return (
     <DashboardLayout title="Loan Officer Management">
       <div className="mb-6 flex flex-wrap items-center justify-end gap-2">
-        <Button onClick={() => handleOpenDialog()}>
+        <Button onClick={() => handleOpenDialog()} disabled={noBranchForManager && !loading}>
           <PlusCircle className="mr-2 h-4 w-4" /> Register Officer
         </Button>
       </div>
@@ -229,6 +270,12 @@ const LoanOfficerManagement = () => {
         <CardContent>
             {loading ? <div className="text-center p-8">Loading officers...</div> :
             <>
+            {noBranchForManager && (
+              <p className="mb-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                Your profile is not linked to a branch, so you cannot list or register loan officers. An administrator
+                must assign you as the manager of a branch.
+              </p>
+            )}
             <div className={excelTableWrapperClassName}>
             <Table className={excelTableClassName}>
                 <TableHeader>
