@@ -51,15 +51,16 @@ import {
 } from '@/lib/borrowerDuplicateCheck';
 import { cn } from '@/lib/utils';
 import {
-    NIDA_DIGIT_LENGTH,
+    NIDA_MAX_INPUT_LENGTH,
     VOTERS_ID_MAX_INPUT_LENGTH,
     DRIVER_LICENSE_DIGIT_LENGTH,
     PHONE_DIGIT_LENGTH,
-    normalizeNidaDigits,
+    normalizeNidaInput,
     normalizeVotersIdInput,
     normalizeDriversLicenseDigits,
     normalizePhoneDigitsMax10,
     normalizePersonNameLettersOnly,
+    formatStoredIdentificationForDisplay,
     validateNidaIdentificationNumber,
     validateVotersIdentificationNumber,
     validateDriversLicenseIdentificationNumber,
@@ -194,7 +195,7 @@ const BorrowerManagement = () => {
 
         const { data: borrowersData, error: borrowersError } = await supabase
             .from('borrowers')
-            .select('*')
+            .select('*, users (full_name), branches (id, name), groups (id, name, center_id)')
             .eq('loan_officer_id', user.id);
 
         const { data: groupsData, error: groupsError } = await supabase
@@ -332,13 +333,20 @@ const BorrowerManagement = () => {
     const filteredBorrowers = useMemo(() => {
         return borrowers.filter((b) => {
             const query = searchQuery.toLowerCase();
-            const matchesSearch =
-                b.first_name.toLowerCase().includes(query) ||
-                b.surname.toLowerCase().includes(query) ||
-                (b.borrower_id && b.borrower_id.toLowerCase().includes(query)) ||
-                (b.phone_number && b.phone_number.includes(query)) ||
-                (b.identification_number && b.identification_number.includes(query));
             const centerId = resolveBorrowerCenterId(b);
+            const centerName = centerId ? centers.find((c) => c.id === centerId)?.name : '';
+            const groupNameFromMap = b.group_id ? groups.find((g) => g.id === b.group_id)?.name : '';
+            const matchesSearch =
+                (b.first_name || '').toLowerCase().includes(query) ||
+                (b.surname || '').toLowerCase().includes(query) ||
+                (b.borrower_id && String(b.borrower_id).toLowerCase().includes(query)) ||
+                (b.phone_number && String(b.phone_number).toLowerCase().includes(query)) ||
+                (b.identification_number && String(b.identification_number).toLowerCase().includes(query)) ||
+                (b.users?.full_name && b.users.full_name.toLowerCase().includes(query)) ||
+                (b.branches?.name && b.branches.name.toLowerCase().includes(query)) ||
+                (b.groups?.name && b.groups.name.toLowerCase().includes(query)) ||
+                (groupNameFromMap && groupNameFromMap.toLowerCase().includes(query)) ||
+                (centerName && centerName.toLowerCase().includes(query));
             const matchesCenter = centerFilter === 'all' || centerId === centerFilter;
             const matchesGroup = groupFilter === 'all' || b.group_id === groupFilter;
             const matchesStatus = statusFilter === 'all' || b.status === statusFilter;
@@ -353,6 +361,8 @@ const BorrowerManagement = () => {
         });
     }, [
         borrowers,
+        centers,
+        groups,
         searchQuery,
         centerFilter,
         groupFilter,
@@ -838,8 +848,15 @@ const BorrowerManagement = () => {
             if (g?.center_id) centerId = g.center_id;
         }
         let idNum = borrower.identification_number ?? '';
-        if (borrower.identification_type === 'voters_id' && idNum.charAt(0) === 't') {
-            idNum = `T${idNum.slice(1)}`;
+        if (borrower.identification_type === 'national_id') {
+            idNum = normalizeNidaInput(idNum);
+        } else if (borrower.identification_type === 'voters_id') {
+            idNum =
+                normalizeVotersIdInput(
+                    typeof idNum === 'string' && idNum.charAt(0) === 't'
+                        ? `T${idNum.slice(1)}`
+                        : idNum,
+                ) || idNum;
         }
         setFormData({
             ...defaultFormState,
@@ -880,7 +897,7 @@ const BorrowerManagement = () => {
                 business_name: 'Johns Store',
                 business_location: 'Kariakoo',
                 identification_type: 'national_id',
-                identification_number: '12345678901234567890',
+                identification_number: '19730701-33201-00006-12',
                 borrower_type: 'group',
                 center_name: centers[0]?.name ?? 'My Centre',
                 group_name: groups[0]?.name ?? 'Upendo Group',
@@ -1294,8 +1311,17 @@ const BorrowerManagement = () => {
                                                     <Input
                                                         className={cn(
                                                             'h-10 w-full',
-                                                            formData.identification_type === 'voters_id' && 'font-semibold',
+                                                            (formData.identification_type === 'national_id' ||
+                                                                formData.identification_type === 'voters_id') &&
+                                                                'font-mono text-base tracking-normal sm:text-sm',
                                                         )}
+                                                        placeholder={
+                                                            formData.identification_type === 'national_id'
+                                                                ? '19730701-33201-00006-12 — hyphens insert as you type'
+                                                                : formData.identification_type === 'voters_id'
+                                                                  ? 'T-1004-9792-964-9 — hyphens insert as you type'
+                                                                  : undefined
+                                                        }
                                                         inputMode={
                                                             formData.identification_type === 'national_id' ||
                                                             formData.identification_type === 'drivers_license'
@@ -1304,7 +1330,7 @@ const BorrowerManagement = () => {
                                                         }
                                                         maxLength={
                                                             formData.identification_type === 'national_id'
-                                                                ? NIDA_DIGIT_LENGTH
+                                                                ? NIDA_MAX_INPUT_LENGTH
                                                                 : formData.identification_type === 'voters_id'
                                                                   ? VOTERS_ID_MAX_INPUT_LENGTH
                                                                   : formData.identification_type === 'drivers_license'
@@ -1315,10 +1341,7 @@ const BorrowerManagement = () => {
                                                         onChange={(e) => {
                                                             let v = e.target.value;
                                                             if (formData.identification_type === 'national_id') {
-                                                                v = normalizeNidaDigits(e.target.value).slice(
-                                                                    0,
-                                                                    NIDA_DIGIT_LENGTH,
-                                                                );
+                                                                v = normalizeNidaInput(e.target.value);
                                                             } else if (formData.identification_type === 'voters_id') {
                                                                 v = normalizeVotersIdInput(e.target.value);
                                                             } else if (formData.identification_type === 'drivers_license') {
@@ -1724,7 +1747,7 @@ const BorrowerManagement = () => {
                             <div className="flex w-full flex-col gap-2 lg:flex-row lg:flex-wrap lg:items-end">
                                 <div className="min-w-0 flex-1 lg:min-w-[12rem]">
                                     <Input
-                                        placeholder="Search ID, name, phone, NIDA…"
+                                        placeholder="Search: name, borrower ID, phone, ID no., officer, branch, centre, group…"
                                         value={searchQuery}
                                         onChange={(e) => setSearchQuery(e.target.value)}
                                         className="w-full"
@@ -1948,7 +1971,8 @@ const BorrowerManagement = () => {
                                                         idTagged ? 'text-destructive' : 'text-foreground',
                                                     )}
                                                 >
-                                                    {b.identification_number || '—'}
+                                                    {formatStoredIdentificationForDisplay(b.identification_type, b.identification_number) ||
+                                                        '—'}
                                                 </span>
                                             </div>
                                         </TableCell>

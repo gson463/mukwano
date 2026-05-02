@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ArrowLeft, UserCircle, Calendar, Eye, FileDown, FileSpreadsheet, Loader2, AlertCircle } from 'lucide-react';
 import { duplicateRowMatchSummary } from '@/lib/borrowerDuplicateCheck';
+import { formatStoredIdentificationForDisplay } from '@/lib/borrowerIdValidation';
 import { useToast } from '@/components/ui/use-toast';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
@@ -126,7 +127,7 @@ const BorrowerDetails = () => {
         ["Phone:", borrower.phone_number],
         ["Address:", borrower.address],
         ["ID Type:", idTypeMap[borrower.identification_type]],
-        ["ID Number:", borrower.identification_number],
+        ["ID Number:", formatStoredIdentificationForDisplay(borrower.identification_type, borrower.identification_number)],
         ["Report Date:", new Date(serverDate).toLocaleDateString()],
     ];
 
@@ -193,7 +194,7 @@ const BorrowerDetails = () => {
         ["Phone", borrower.phone_number],
         ["Address", borrower.address],
         ["ID Type", idTypeMap[borrower.identification_type]],
-        ["ID Number", borrower.identification_number],
+        ["ID Number", formatStoredIdentificationForDisplay(borrower.identification_type, borrower.identification_number)],
         ["Report Date", new Date(serverDate).toLocaleDateString()],
     ];
     const wsSummary = XLSX.utils.aoa_to_sheet(summaryData);
@@ -333,7 +334,13 @@ const BorrowerDetails = () => {
                     <DetailItem label="Phone" value={borrower.phone_number} />
                     <DetailItem label="Address" value={borrower.address} />
                     <DetailItem label="ID Type" value={idTypeMap[borrower.identification_type]} />
-                    <DetailItem label="ID Number" value={borrower.identification_number} />
+                    <DetailItem
+                        label="ID Number"
+                        value={formatStoredIdentificationForDisplay(
+                            borrower.identification_type,
+                            borrower.identification_number,
+                        )}
+                    />
                 </CardContent>
             </Card>
 

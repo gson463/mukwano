@@ -16,7 +16,7 @@ import { Calendar } from '@/components/ui/calendar';
 import { PlusCircle, Eye, Trash2, Download, Upload, Briefcase, DollarSign, AlertTriangle, Edit, Loader2, Calendar as CalendarIcon, Coins as HandCoins, CheckCircle2, User, CreditCard, CalendarDays, ChevronLeft, ChevronRight } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { generateSchedule } from '@/utils/loanUtils';
-import { getTodayDateString, isYMDBeforeTodayEAT } from '@/utils/dateValidation';
+import { getTodayDateString } from '@/utils/dateValidation';
 import { getDisabledDates, validateHolidaySelection, isNonWorkingDay, getNextWorkingDateString } from '@/utils/holidayUtils';
 import * as XLSX from 'xlsx';
 import { toZonedTime, format as formatTZ } from 'date-fns-tz';
@@ -191,14 +191,6 @@ const LoanManagement = () => {
     }, [resetFormData]);
 
     const handleDateChange = (field, value) => {
-        if (isYMDBeforeTodayEAT(value)) {
-            toast({
-                title: 'Invalid date',
-                description: 'Choose today or a future date. Past dates are not allowed.',
-                variant: 'destructive',
-            });
-            return;
-        }
         if (!validateHolidaySelection(value, toast, 'process', holidays)) {
             return;
         }
@@ -332,14 +324,6 @@ const LoanManagement = () => {
     const handleDisburse = async () => {
         const { borrowerId, productId, principal, disbursementDate, repaymentStartDate } = formData;
         
-        if (isYMDBeforeTodayEAT(disbursementDate) || isYMDBeforeTodayEAT(repaymentStartDate)) {
-            toast({
-                title: 'Invalid dates',
-                description: 'Disbursement and repayment dates cannot be in the past.',
-                variant: 'destructive',
-            });
-            return;
-        }
         if (isNonWorkingDay(disbursementDate, holidays) || isNonWorkingDay(repaymentStartDate, holidays)) {
             toast({
                 title: 'Invalid dates',
@@ -520,7 +504,7 @@ const LoanManagement = () => {
             ['borrower_id', 'The unique ID of the borrower. Must exist in the system.', 'B-123456'],
             ['loan_product_name', 'The exact name of an active loan product.', 'Personal Loan'],
             ['principal', 'The loan amount without currency symbols.', '500000'],
-            ['disbursement_date', 'Date the loan is given. Format: YYYY-MM-DD. Must be a working day.', '2025-11-10'],
+            ['disbursement_date', 'Date the loan is given. Format: YYYY-MM-DD. May be past or future; must be a working day.', '2025-11-10'],
             ['repayment_start_date', 'Date repayments begin. Format: YYYY-MM-DD. Must be a working day.', '2025-12-10']
         ];
         const instructionsSheet = XLSX.utils.aoa_to_sheet(instructions);
@@ -562,10 +546,6 @@ const LoanManagement = () => {
 
                     if (!borrower || !product || !row.principal || !disbursementDate || !repaymentStartDate) {
                         skippedLoans.push({ ...row, reason: 'Missing or invalid data' });
-                        continue;
-                    }
-                    if (isYMDBeforeTodayEAT(disbursementDate) || isYMDBeforeTodayEAT(repaymentStartDate)) {
-                        skippedLoans.push({ ...row, reason: 'Disbursement or repayment date cannot be in the past' });
                         continue;
                     }
                     if (!isWorkingDay(disbursementDate) || !isWorkingDay(repaymentStartDate)) {
@@ -703,7 +683,6 @@ const LoanManagement = () => {
         const p = parseFloat(String(principal));
         if (Number.isNaN(p) || p <= 0) return false;
         if (!disbursementDate || !repaymentStartDate) return false;
-        if (isYMDBeforeTodayEAT(disbursementDate) || isYMDBeforeTodayEAT(repaymentStartDate)) return false;
         if (isNonWorkingDay(disbursementDate, holidays) || isNonWorkingDay(repaymentStartDate, holidays)) return false;
         const dDisb = parse(disbursementDate, 'yyyy-MM-dd', new Date());
         const rD = parse(repaymentStartDate, 'yyyy-MM-dd', new Date());
@@ -753,7 +732,7 @@ const LoanManagement = () => {
                                     transition={{ duration: 0.4 }}
                                 >
                                     <p className="text-xs sm:text-sm text-muted-foreground rounded-md border border-border/60 bg-card/80 px-3 py-2">
-                                        Disbursement must be on or after today (EAT), on a working day only. Sundays and public holidays in the system are not allowed. Repayment start must be a later working day.
+                                        Disbursement may be today, in the future, or backdated (past dates allowed). Dates must be working days only — Sundays and public holidays in the system are not allowed. Repayment start must be a later working day than disbursement.
                                     </p>
                                     <div className="grid grid-cols-1 gap-6 sm:gap-8 lg:grid-cols-2">
                                         {/* Left Column: Borrower & Product */}
@@ -852,7 +831,6 @@ const LoanManagement = () => {
                                                     <div className="relative w-full min-w-0">
                                                         <Input
                                                             type="date"
-                                                            min={todayEAT}
                                                             value={formData.disbursementDate}
                                                             onChange={(e) => handleDateChange('disbursementDate', e.target.value)}
                                                             className="w-full min-w-0 h-11 min-h-11 max-w-full border-gray-200 focus:ring-2 focus:ring-orange-200 focus:border-orange-500 cursor-pointer [color-scheme:light]"
