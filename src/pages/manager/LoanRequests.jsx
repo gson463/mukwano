@@ -159,6 +159,20 @@ const LoanRequests = () => {
 
     const formattedRepaymentStartDate = formatTZ(toZonedTime(edit_request.repaymentStartDate, EAT_TIMEZONE), 'yyyy-MM-dd', { timeZone: EAT_TIMEZONE });
 
+    const schedule =
+        Array.isArray(edit_request.newSchedule) && edit_request.newSchedule.length > 0
+            ? edit_request.newSchedule
+            : generateSchedule(
+                  principal,
+                  parseFloat(product.interest_rate),
+                  totalPayable,
+                  product.loan_period,
+                  product.loan_period_unit,
+                  product.repayment_frequency,
+                  formattedRepaymentStartDate,
+                  holidays,
+              );
+
     const updatedLoan = {
       product_id: edit_request.productId,
       disbursement_date: formatTZ(toZonedTime(edit_request.disbursementDate, EAT_TIMEZONE), 'yyyy-MM-dd', { timeZone: EAT_TIMEZONE }),
@@ -172,7 +186,7 @@ const LoanRequests = () => {
       balance: newBalance,
       outstanding_interest: newOutstandingInterest,
       status: 'active',
-      schedule: generateSchedule(totalPayable, product.loan_period, product.loan_period_unit, product.repayment_frequency, formattedRepaymentStartDate, holidays),
+      schedule,
       edit_request: null,
     };
     
@@ -180,8 +194,20 @@ const LoanRequests = () => {
     if (error) {
         toast({ title: 'Error', description: error.message, variant: 'destructive' });
     } else {
+        const { error: recalcErr } = await supabase.rpc('recalculate_loan_schedule', { p_loan_id: loan.id });
+        const { error: statusErr } = await supabase.rpc('update_all_loan_statuses');
+        if (recalcErr || statusErr) {
+            console.error(recalcErr || statusErr);
+            toast({
+                title: 'Loan updated',
+                description:
+                    'Changes were saved but synchronizing the repayment schedule failed. Use View schedule on the loan or try again.',
+                variant: 'destructive',
+            });
+        } else {
+            toast({ title: 'Success', description: 'Loan edit approved and schedule updated.' });
+        }
         fetchData();
-        toast({ title: 'Success', description: 'Loan edit approved and updated.' });
     }
   };
 
