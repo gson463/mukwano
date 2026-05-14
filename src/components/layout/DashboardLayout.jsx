@@ -25,6 +25,7 @@ import {
   X,
   Archive,
   ScrollText,
+  ClipboardList,
 } from 'lucide-react';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
 import { Button } from '@/components/ui/button';
@@ -72,6 +73,7 @@ const managerLinks = [
 const officerLinks = [
   { to: '/officer/dashboard', icon: Home, text: 'Dashboard' },
   { to: '/officer/centers-groups', icon: Building, text: 'Centers & Groups' },
+  { to: '/officer/attendance', icon: ClipboardList, text: 'Attendance' },
   { to: '/officer/borrowers', icon: Users, text: 'Borrowers' },
   { to: '/officer/loans', icon: Briefcase, text: 'Loans' },
   { to: '/officer/group-repayment', icon: Users2, text: 'Group Repayment' },

@@ -7,6 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { useToast } from '@/components/ui/use-toast';
 import { motion } from 'framer-motion';
 import { Upload, Save, Image as ImageIcon, RotateCw } from 'lucide-react';
+import { Checkbox } from '@/components/ui/checkbox';
 import { supabase } from '@/lib/customSupabaseClient';
 
 const SystemSettings = () => {
@@ -15,6 +16,8 @@ const SystemSettings = () => {
     systemName: '',
     logoUrl: '',
     currency: '',
+    attendanceMinMeetingsForIncreaseEligibility: '6',
+    attendanceRequireNoDefaultForAutoIncrease: 'true',
   });
   const [logoPreview, setLogoPreview] = useState('');
   const [newLogoFile, setNewLogoFile] = useState(null);
@@ -36,7 +39,11 @@ const SystemSettings = () => {
         systemName: dbConfig.systemName || 'Mukwano Loans',
         logoUrl: dbConfig.logoUrl || '',
         currency: dbConfig.currency || 'TZS',
-      }
+        attendanceMinMeetingsForIncreaseEligibility:
+          dbConfig.attendanceMinMeetingsForIncreaseEligibility || '6',
+        attendanceRequireNoDefaultForAutoIncrease:
+          dbConfig.attendanceRequireNoDefaultForAutoIncrease === 'false' ? 'false' : 'true',
+      };
       setConfig(fetchedConfig);
       setLogoPreview(fetchedConfig.logoUrl);
     }
@@ -195,6 +202,49 @@ const SystemSettings = () => {
                       onChange={handleInputChange}
                       placeholder="e.g., TZS, USD"
                     />
+                  </div>
+
+                  <div className="rounded-lg border border-border/80 bg-muted/30 p-4 space-y-4">
+                    <div>
+                      <p className="text-sm font-medium">Centre attendance</p>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Thresholds for counting meetings attended (reference for reporting; extend later for loan rules).
+                      </p>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="attendanceMinMeetingsForIncreaseEligibility">
+                        Minimum meetings marked Present (reference)
+                      </Label>
+                      <Input
+                        id="attendanceMinMeetingsForIncreaseEligibility"
+                        name="attendanceMinMeetingsForIncreaseEligibility"
+                        type="number"
+                        min={0}
+                        max={999}
+                        value={config.attendanceMinMeetingsForIncreaseEligibility}
+                        onChange={handleInputChange}
+                      />
+                    </div>
+                    <div className="flex items-start gap-3 space-y-0">
+                      <Checkbox
+                        id="attendanceRequireNoDefaultForAutoIncrease"
+                        checked={config.attendanceRequireNoDefaultForAutoIncrease === 'true'}
+                        onCheckedChange={(checked) =>
+                          setConfig((prev) => ({
+                            ...prev,
+                            attendanceRequireNoDefaultForAutoIncrease: checked === true ? 'true' : 'false',
+                          }))
+                        }
+                      />
+                      <div className="grid gap-1.5 leading-none">
+                        <Label htmlFor="attendanceRequireNoDefaultForAutoIncrease" className="cursor-pointer font-normal">
+                          Require no defaulted loan for attendance reference eligibility
+                        </Label>
+                        <p className="text-xs text-muted-foreground">
+                          Stored for future automation; attendance recording works regardless.
+                        </p>
+                      </div>
+                    </div>
                   </div>
                 </>
               )}

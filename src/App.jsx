@@ -18,6 +18,7 @@ import AdminBorrowerManagement from '@/pages/admin/BorrowerManagement';
 import AdminLoanManagement from '@/pages/admin/LoanManagement';
 import AdminDataHistory from '@/pages/admin/DataHistory';
 import CenterGroupManagement from '@/pages/officer/CenterGroupManagement';
+import AttendanceManagement from '@/pages/officer/AttendanceManagement';
 import BorrowerManagement from '@/pages/officer/BorrowerManagement';
 import BorrowerDetails from '@/pages/officer/BorrowerDetails';
 import LoanManagement from '@/pages/officer/LoanManagement';
@@ -139,6 +140,7 @@ function App() {
       <Route path="/officer/dashboard" element={<ProtectedRoute allowedRoles={['officer']}><LoanOfficerDashboard /></ProtectedRoute>} />
       <Route path="/officer/dashboard/metric/:metric" element={<ProtectedRoute allowedRoles={['officer']}><DashboardMetricDrillDown /></ProtectedRoute>} />
       <Route path="/officer/centers-groups" element={<ProtectedRoute allowedRoles={['officer']}><CenterGroupManagement /></ProtectedRoute>} />
+      <Route path="/officer/attendance" element={<ProtectedRoute allowedRoles={['officer']}><AttendanceManagement /></ProtectedRoute>} />
       <Route path="/officer/borrowers" element={<ProtectedRoute allowedRoles={['officer']}><BorrowerManagement /></ProtectedRoute>} />
       <Route path="/officer/borrowers/:borrowerId" element={<ProtectedRoute allowedRoles={['officer']}><BorrowerDetails /></ProtectedRoute>} />
       <Route
