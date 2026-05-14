@@ -637,7 +637,7 @@ const AttendanceManagement = () => {
                   <>
                     {groupBorrowersByGroup(borrowersForSelectedMeeting, groups).map(({ group, borrowers: brs }) => (
                       <div key={group?.id || 'x'} className="rounded-lg border p-4 space-y-2">
-                        <h4 className="font-semibold text-sm bg-emerald-600 text-white px-2 py-1 rounded inline-block">
+                        <h4 className="font-semibold text-sm bg-green-800 text-white px-2 py-1 rounded inline-block">
                           {group?.name || 'Group'}
                         </h4>
                         <div className="space-y-2">
@@ -663,9 +663,9 @@ const AttendanceManagement = () => {
                                       variant={st === key ? 'default' : 'outline'}
                                       className={cn(
                                         'h-8 min-w-[5.5rem] text-xs',
-                                        st === key && key === 'present' && 'bg-emerald-600 hover:bg-emerald-700',
+                                        st === key && key === 'present' && 'bg-green-700 hover:bg-green-800',
                                         st === key && key === 'absent' && 'bg-red-600 hover:bg-red-700',
-                                        st === key && key === 'ruhusa' && 'bg-amber-600 hover:bg-amber-700'
+                                        st === key && key === 'ruhusa' && 'bg-green-900 hover:bg-green-950'
                                       )}
                                       onClick={() => setAttendanceMap((prev) => ({ ...prev, [b.id]: key }))}
                                     >
@@ -775,7 +775,7 @@ const AttendanceManagement = () => {
               <CardHeader>
                 <CardTitle>Printable attendance sheet</CardTitle>
                 <CardDescription>
-                  Generates a branded PDF (logo, gold headings) with borrowers grouped by group and empty boxes for manual marks. Minimum
+                  Generates a Mukwano-branded PDF (logo, green headings) with borrowers grouped by group and empty boxes for manual marks. Minimum
                   meetings required for automatic loan-increase eligibility are set by Admin in System Settings (Attendance &amp; loan
                   increase — not “days”, but number of centre meetings attended).
                 </CardDescription>

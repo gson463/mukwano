@@ -1,10 +1,15 @@
 import jsPDF from 'jspdf';
 import 'jspdf-autotable';
 
-/** FCL brand (match tailwind.config.js brand.gold / gold-deep) */
-const BRAND_GOLD = [212, 175, 55];
-const BRAND_GOLD_DEEP = [184, 134, 11];
-const BRAND_GOLD_MUTED = [201, 169, 97];
+/** Mukwano greens — Tailwind `green` palette (aligned with DashboardLayout green-900 / green-700 accents) */
+const BRAND_GREEN_ACCENT = [22, 163, 74]; // green-600 — strip, rules
+const BRAND_GREEN_PRIMARY = [21, 128, 61]; // green-700 — secondary emphasis
+const BRAND_GREEN_TITLE = [22, 101, 52]; // green-800 — main titles
+const BRAND_GREEN_DEEP = [20, 83, 45]; // green-900 — group bars (sidebar tone)
+const HEAD_FILL_GREEN = [240, 253, 244]; // green-50 — table headers
+/** Distinct “excused” tint — teal, still within Mukwano green family (not gold/amber) */
+const STATUS_RUHUSA_FILL = [204, 251, 241]; // teal-100
+const STATUS_RUHUSA_TEXT = [17, 94, 89]; // teal-800
 const NEUTRAL_700 = [55, 65, 81];
 const NEUTRAL_500 = [100, 116, 139];
 
@@ -35,7 +40,7 @@ async function loadLogoDataUrl(logoUrl) {
  * @returns {{ y: number, pageW: number, margin: number, orientation: string }}
  */
 async function populateBrandedHeader(doc, opts, pageW, margin, { mainTitle, badgeRight }) {
-  doc.setFillColor(BRAND_GOLD[0], BRAND_GOLD[1], BRAND_GOLD[2]);
+  doc.setFillColor(BRAND_GREEN_ACCENT[0], BRAND_GREEN_ACCENT[1], BRAND_GREEN_ACCENT[2]);
   doc.rect(0, 0, pageW, 2.2, 'F');
 
   let y = margin + 2;
@@ -60,7 +65,7 @@ async function populateBrandedHeader(doc, opts, pageW, margin, { mainTitle, badg
 
   doc.setFontSize(15);
   doc.setFont(undefined, 'bold');
-  doc.setTextColor(BRAND_GOLD_DEEP[0], BRAND_GOLD_DEEP[1], BRAND_GOLD_DEEP[2]);
+  doc.setTextColor(BRAND_GREEN_TITLE[0], BRAND_GREEN_TITLE[1], BRAND_GREEN_TITLE[2]);
   doc.text(mainTitle, textX, headerTop + 6);
 
   doc.setFontSize(11);
@@ -76,12 +81,12 @@ async function populateBrandedHeader(doc, opts, pageW, margin, { mainTitle, badg
   }
 
   doc.setFontSize(7);
-  doc.setTextColor(BRAND_GOLD_MUTED[0], BRAND_GOLD_MUTED[1], BRAND_GOLD_MUTED[2]);
+  doc.setTextColor(BRAND_GREEN_PRIMARY[0], BRAND_GREEN_PRIMARY[1], BRAND_GREEN_PRIMARY[2]);
   doc.text(badgeRight, titleRight, headerTop + 6, { align: 'right' });
 
   y = headerTop + Math.max(logoH, 18) + 3;
 
-  doc.setDrawColor(BRAND_GOLD[0], BRAND_GOLD[1], BRAND_GOLD[2]);
+  doc.setDrawColor(BRAND_GREEN_ACCENT[0], BRAND_GREEN_ACCENT[1], BRAND_GREEN_ACCENT[2]);
   doc.setLineWidth(0.6);
   doc.line(margin, y, pageW - margin, y);
   y += 5;
@@ -144,7 +149,7 @@ export async function downloadAttendanceSheetPdf(opts) {
       y = 14;
     }
 
-    doc.setFillColor(BRAND_GOLD_DEEP[0], BRAND_GOLD_DEEP[1], BRAND_GOLD_DEEP[2]);
+    doc.setFillColor(BRAND_GREEN_DEEP[0], BRAND_GREEN_DEEP[1], BRAND_GREEN_DEEP[2]);
     doc.rect(margin, y - 1, pageW - 2 * margin, 6, 'F');
     doc.setTextColor(255, 255, 255);
     doc.setFontSize(9);
@@ -172,8 +177,8 @@ export async function downloadAttendanceSheetPdf(opts) {
       theme: 'grid',
       styles: { fontSize: numBoxes > 24 ? 5 : 6, cellPadding: 0.8, minCellHeight: 5 },
       headStyles: {
-        fillColor: [245, 238, 220],
-        textColor: BRAND_GOLD_DEEP,
+        fillColor: HEAD_FILL_GREEN,
+        textColor: BRAND_GREEN_DEEP,
         fontStyle: 'bold',
         fontSize: 6,
       },
@@ -212,7 +217,7 @@ export async function downloadRecordedAttendancePdf(opts) {
 
   doc.setFontSize(10);
   doc.setFont(undefined, 'bold');
-  doc.setTextColor(BRAND_GOLD_DEEP[0], BRAND_GOLD_DEEP[1], BRAND_GOLD_DEEP[2]);
+  doc.setTextColor(BRAND_GREEN_TITLE[0], BRAND_GREEN_TITLE[1], BRAND_GREEN_TITLE[2]);
   doc.text(`Meeting date: ${opts.meetingDate || '—'}`, margin, y);
   y += 6;
 
@@ -261,7 +266,7 @@ export async function downloadRecordedAttendancePdf(opts) {
       y = 14;
     }
 
-    doc.setFillColor(BRAND_GOLD_DEEP[0], BRAND_GOLD_DEEP[1], BRAND_GOLD_DEEP[2]);
+    doc.setFillColor(BRAND_GREEN_DEEP[0], BRAND_GREEN_DEEP[1], BRAND_GREEN_DEEP[2]);
     doc.rect(margin, y - 1, pageW - 2 * margin, 6, 'F');
     doc.setTextColor(255, 255, 255);
     doc.setFontSize(9);
@@ -284,8 +289,8 @@ export async function downloadRecordedAttendancePdf(opts) {
       theme: 'grid',
       styles: { fontSize: 8, cellPadding: 1.2, minCellHeight: 6 },
       headStyles: {
-        fillColor: [245, 238, 220],
-        textColor: BRAND_GOLD_DEEP,
+        fillColor: HEAD_FILL_GREEN,
+        textColor: BRAND_GREEN_DEEP,
         fontStyle: 'bold',
         fontSize: 8,
       },
@@ -306,8 +311,8 @@ export async function downloadRecordedAttendancePdf(opts) {
             data.cell.styles.fillColor = [254, 226, 226];
             data.cell.styles.textColor = [153, 27, 27];
           } else if (raw === 'Ruhusa') {
-            data.cell.styles.fillColor = [254, 243, 199];
-            data.cell.styles.textColor = [146, 64, 14];
+            data.cell.styles.fillColor = STATUS_RUHUSA_FILL;
+            data.cell.styles.textColor = STATUS_RUHUSA_TEXT;
           }
         }
       },
@@ -386,7 +391,7 @@ export async function downloadCompiledAttendancePdf(opts) {
 
     doc.setFontSize(11);
     doc.setFont(undefined, 'bold');
-    doc.setTextColor(BRAND_GOLD_DEEP[0], BRAND_GOLD_DEEP[1], BRAND_GOLD_DEEP[2]);
+    doc.setTextColor(BRAND_GREEN_TITLE[0], BRAND_GREEN_TITLE[1], BRAND_GREEN_TITLE[2]);
     doc.text(`Centre: ${sec.centreName || '—'}`, margin, y);
     y += 5;
     doc.setFontSize(8);
@@ -403,7 +408,7 @@ export async function downloadCompiledAttendancePdf(opts) {
         y = margin;
       }
 
-      doc.setFillColor(BRAND_GOLD_DEEP[0], BRAND_GOLD_DEEP[1], BRAND_GOLD_DEEP[2]);
+      doc.setFillColor(BRAND_GREEN_DEEP[0], BRAND_GREEN_DEEP[1], BRAND_GREEN_DEEP[2]);
       doc.rect(margin, y - 1, pageW - 2 * margin, 6, 'F');
       doc.setTextColor(255, 255, 255);
       doc.setFontSize(9);
@@ -451,8 +456,8 @@ export async function downloadCompiledAttendancePdf(opts) {
         theme: 'grid',
         styles: { fontSize, cellPadding: 0.6, minCellHeight: 5 },
         headStyles: {
-          fillColor: [245, 238, 220],
-          textColor: BRAND_GOLD_DEEP,
+          fillColor: HEAD_FILL_GREEN,
+          textColor: BRAND_GREEN_DEEP,
           fontStyle: 'bold',
           fontSize: Math.max(5, fontSize - 1),
         },
@@ -470,8 +475,8 @@ export async function downloadCompiledAttendancePdf(opts) {
               data.cell.styles.fillColor = [254, 226, 226];
               data.cell.styles.textColor = [153, 27, 27];
             } else if (raw === 'R') {
-              data.cell.styles.fillColor = [254, 243, 199];
-              data.cell.styles.textColor = [146, 64, 14];
+              data.cell.styles.fillColor = STATUS_RUHUSA_FILL;
+              data.cell.styles.textColor = STATUS_RUHUSA_TEXT;
             } else {
               data.cell.styles.fillColor = [248, 250, 252];
               data.cell.styles.textColor = [100, 116, 139];

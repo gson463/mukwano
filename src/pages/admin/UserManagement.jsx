@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import DashboardLayout from '@/components/layout/DashboardLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -9,7 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useToast } from '@/components/ui/use-toast';
 import { motion } from 'framer-motion';
-import { PlusCircle, Edit, Trash2, RotateCw, ShieldAlert } from 'lucide-react';
+import { PlusCircle, Edit, Trash2, RotateCw, ShieldAlert, Eye, Loader2 } from 'lucide-react';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -34,8 +35,18 @@ import {
 import { DEFAULT_TABLE_PAGE_SIZE, getTotalPages, slicePage } from '@/lib/tablePagination';
 import { TablePaginationBar } from '@/components/table/TablePaginationBar';
 import { adminCentersForSelect, adminGroupsForSelect } from '@/lib/adminHierarchyFilters';
+import { useAuth } from '@/contexts/SupabaseAuthContext';
+import {
+  saveAdminImpersonationBackupSilent,
+  clearAdminImpersonationBackup,
+  readAdminImpersonationBackup,
+  hasStoredAdminImpersonationBackup,
+  notifyImpersonationChange,
+} from '@/lib/adminImpersonation';
 
 const UserManagement = () => {
+  const navigate = useNavigate();
+  const { session } = useAuth();
   const [users, setUsers] = useState([]);
   const [branches, setBranches] = useState([]);
   const [centers, setCenters] = useState([]);
@@ -52,6 +63,7 @@ const UserManagement = () => {
   const [centerFilter, setCenterFilter] = useState('all');
   const [groupFilter, setGroupFilter] = useState('all');
   const [currentPage, setCurrentPage] = useState(1);
+  const [impersonatingId, setImpersonatingId] = useState(null);
   const { toast } = useToast();
 
   const centersInSelect = useMemo(
@@ -173,6 +185,90 @@ const UserManagement = () => {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  const restoreAdminSessionFromSilentBackup = async () => {
+    const b = readAdminImpersonationBackup();
+    if (b?.access_token && b?.refresh_token) {
+      const { error } = await supabase.auth.setSession({
+        access_token: b.access_token,
+        refresh_token: b.refresh_token,
+      });
+      if (error) console.error(error);
+    }
+    clearAdminImpersonationBackup();
+  };
+
+  const handleImpersonate = async (row) => {
+    if (hasStoredAdminImpersonationBackup()) {
+      toast({
+        title: 'Already impersonating',
+        description: 'End impersonation using the amber banner first.',
+        variant: 'destructive',
+      });
+      return;
+    }
+    if (!session?.access_token || !session?.refresh_token) {
+      toast({ title: 'Session error', description: 'Sign in again and retry.', variant: 'destructive' });
+      return;
+    }
+    if (row.id === session.user?.id) {
+      toast({ title: 'Cannot impersonate yourself', variant: 'destructive' });
+      return;
+    }
+
+    setImpersonatingId(row.id);
+    try {
+      saveAdminImpersonationBackupSilent(session);
+
+      const { data, error: invokeError } = await supabase.functions.invoke('impersonate-start', {
+        body: { user_id: row.id },
+      });
+
+      let token_hash = typeof data?.token_hash === 'string' ? data.token_hash : null;
+
+      if (invokeError || !token_hash) {
+        let serverMsg = invokeError?.message || 'Edge function failed.';
+        if (invokeError?.context && typeof invokeError.context.json === 'function') {
+          try {
+            const errBody = await invokeError.context.json();
+            if (errBody?.error && typeof errBody.error === 'string') serverMsg = errBody.error;
+          } catch {
+            /* ignore */
+          }
+        }
+        await restoreAdminSessionFromSilentBackup();
+        toast({
+          title: 'Impersonation failed',
+          description: `${serverMsg} Deploy the impersonate-start Edge Function if missing (supabase/functions/impersonate-start).`,
+          variant: 'destructive',
+        });
+        return;
+      }
+
+      const { error: voErr } = await supabase.auth.verifyOtp({
+        token_hash,
+        type: 'magiclink',
+      });
+      if (voErr) {
+        await restoreAdminSessionFromSilentBackup();
+        toast({
+          title: 'Could not switch user',
+          description: voErr.message || 'Token verification failed.',
+          variant: 'destructive',
+        });
+        return;
+      }
+
+      notifyImpersonationChange();
+      toast({
+        title: `Viewing as ${row.full_name}`,
+        description: 'Use “End impersonation” at the top to return to admin.',
+      });
+      navigate('/', { replace: true });
+    } finally {
+      setImpersonatingId(null);
+    }
+  };
 
   const handleOpenDialog = (user = null) => {
     if (user) {
@@ -490,6 +586,23 @@ const UserManagement = () => {
                       <TableCell className={excelTdClassName()}><Badge variant={getRoleBadgeVariant(user.role)}>{user.role}</Badge></TableCell>
                       <TableCell className={excelTdClassName()}>{user.branches?.name || 'N/A'}</TableCell>
                       <TableCell className={excelTdClassName('space-x-2')}>
+                        <Button
+                          variant="outline"
+                          size="icon"
+                          title="View as this user"
+                          disabled={
+                            impersonatingId != null ||
+                            user.id === session?.user?.id ||
+                            hasStoredAdminImpersonationBackup()
+                          }
+                          onClick={() => handleImpersonate(user)}
+                        >
+                          {impersonatingId === user.id ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <Eye className="h-4 w-4" />
+                          )}
+                        </Button>
                         <Button variant="outline" size="icon" onClick={() => handleOpenDialog(user)} disabled={isEditDisabled(user)}><Edit className="h-4 w-4" /></Button>
                         <AlertDialog>
                           <AlertDialogTrigger asChild>

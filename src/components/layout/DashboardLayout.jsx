@@ -34,6 +34,7 @@ import { Helmet } from 'react-helmet';
 import { cn } from '@/lib/utils';
 import { DEFAULT_ORG_NAME, fetchSystemConfig } from '@/lib/systemConfig';
 import { SystemBrandLogo } from '@/components/SystemBrandLogo';
+import { ImpersonationBanner } from '@/components/admin/ImpersonationBanner';
 import { motion, AnimatePresence } from 'framer-motion';
 
 const reportLinks = [{ to: '/reports', icon: BarChart3, text: 'Reports' }];
@@ -323,7 +324,10 @@ const DashboardLayout = ({ children, title, description = 'Microfinance Manageme
           </header>
 
           <main className="relative min-w-0 flex-1 overflow-y-auto overflow-x-auto bg-gray-50/50 p-4 sm:p-6 lg:p-8 [scrollbar-gutter:stable]">
-            <div className="mx-auto min-w-0 w-full max-w-7xl">{children}</div>
+            <div className="mx-auto min-w-0 w-full max-w-7xl">
+              <ImpersonationBanner />
+              {children}
+            </div>
           </main>
         </div>
       </div>

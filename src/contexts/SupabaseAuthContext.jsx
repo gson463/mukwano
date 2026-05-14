@@ -2,6 +2,7 @@ import React, { createContext, useContext, useEffect, useState, useCallback, use
 import { supabase } from '@/lib/customSupabaseClient';
 import { useToast } from '@/components/ui/use-toast';
 import { logAudit } from '@/lib/auditLog';
+import { clearAdminImpersonationBackup } from '@/lib/adminImpersonation';
 
 const AuthContext = createContext(undefined);
 
@@ -39,6 +40,7 @@ export const AuthProvider = ({ children }) => {
     } catch (error) {
       console.error("Error clearing auth state:", error);
     } finally {
+      clearAdminImpersonationBackup();
       handleSession(null);
     }
   }, [handleSession]);
