@@ -46,6 +46,18 @@ const REPAYMENTS_FOR_REPORT_SELECT = [
     'loans(id, borrower_id, loan_id, product_id, status, borrowers(id, first_name, surname, group_id, center_id, branch_id, borrower_id, phone_number, borrower_type, groups(id, name, center_id)))',
 ].join(',');
 
+/** Same as REPAYMENTS_FOR_REPORT_SELECT but inner-join loans+borrowers so branch filter runs in SQL (manager performance). */
+const REPAYMENTS_FOR_REPORT_SELECT_BRANCH_SCOPED = [
+    'id',
+    'loan_id',
+    'officer_id',
+    'amount',
+    'principal_paid',
+    'interest_paid',
+    'actual_payment_date',
+    'loans!inner(id, borrower_id, loan_id, product_id, status, borrowers!inner(id, first_name, surname, group_id, center_id, branch_id, borrower_id, phone_number, borrower_type, groups(id, name, center_id)))',
+].join(',');
+
 const StatCard = ({ title, value, icon: Icon, color }) => (
   <Card>
     <CardHeader className="flex flex-row items-center justify-between pb-2">
@@ -91,48 +103,97 @@ const Reports = () => {
               : formatDate(endOfDay(endOfMonth(new Date())), 'yyyy-MM-dd');
 
         try {
-            let repaymentsListQuery = supabase
-                .from('repayments')
-                .select(REPAYMENTS_FOR_REPORT_SELECT)
-                .gte('actual_payment_date', repayFrom)
-                .lte('actual_payment_date', repayTo)
-                .order('actual_payment_date', { ascending: false });
-            if (user?.user_metadata?.role === 'officer') {
-                repaymentsListQuery = repaymentsListQuery.eq('officer_id', user.id);
-            }
-
-            const [
-                configRes, loansRes, borrowersRes, repaymentsRes, usersRes,
-                branchesRes, productsRes, centersRes, groupsRes
-            ] = await Promise.all([
-                supabase.from('system_config').select('value').eq('key', 'currency').single(),
-                supabase.from('loans').select(LOANS_FOR_REPORT_SELECT),
-                supabase.from('borrowers').select('*'),
-                repaymentsListQuery,
-                supabase.from('users').select('*'),
-                supabase.from('branches').select('*'),
-                supabase.from('loan_products').select('*'),
-                supabase.from('centers').select('*'),
-                supabase.from('groups').select('*'),
-            ]);
-
             const checkError = (res, name) => {
                 if (res.error) throw new Error(`Failed to fetch ${name}: ${res.error.message}`);
                 return res.data;
             };
 
+            const role = user?.user_metadata?.role;
+            const managerBranchId = user?.user_metadata?.branch_id ?? null;
+
+            // Centres first — manager needs IDs to constrain groups query (avoid loading all centres/groups)
+            const centersQuery =
+                role === 'manager' && managerBranchId
+                    ? supabase.from('centers').select('*').eq('branch_id', managerBranchId)
+                    : role === 'officer'
+                      ? supabase.from('centers').select('*').eq('loan_officer_id', user.id)
+                      : supabase.from('centers').select('*');
+
+            const centersRes = await centersQuery;
+            if (centersRes.error) throw new Error(`Failed to fetch centers: ${centersRes.error.message}`);
+            const centersData = centersRes.data || [];
+            const centerIds = centersData.map((c) => c.id);
+
+            const groupsProm =
+                role === 'manager' && managerBranchId && centerIds.length === 0
+                    ? Promise.resolve({ data: [], error: null })
+                    : role === 'manager' && managerBranchId
+                      ? supabase.from('groups').select('*').in('center_id', centerIds)
+                      : role === 'officer'
+                        ? supabase.from('groups').select('*').eq('loan_officer_id', user.id)
+                        : supabase.from('groups').select('*');
+
+            let repaymentsListQuery = supabase
+                .from('repayments')
+                .select(
+                    role === 'manager' && managerBranchId
+                        ? REPAYMENTS_FOR_REPORT_SELECT_BRANCH_SCOPED
+                        : REPAYMENTS_FOR_REPORT_SELECT,
+                )
+                .gte('actual_payment_date', repayFrom)
+                .lte('actual_payment_date', repayTo)
+                .order('actual_payment_date', { ascending: false });
+
+            if (role === 'manager' && managerBranchId) {
+                repaymentsListQuery = repaymentsListQuery.eq('loans.borrowers.branch_id', managerBranchId);
+            } else if (role === 'officer') {
+                repaymentsListQuery = repaymentsListQuery.eq('officer_id', user.id);
+            }
+
+            let loansQuery = supabase.from('loans').select(LOANS_FOR_REPORT_SELECT);
+            if (role === 'manager' && managerBranchId) {
+                loansQuery = loansQuery.eq('borrowers.branch_id', managerBranchId);
+            } else if (role === 'officer') {
+                loansQuery = loansQuery.eq('officer_id', user.id);
+            }
+
+            let usersQuery =
+                role === 'admin'
+                    ? supabase.from('users').select('*')
+                    : role === 'manager' && managerBranchId
+                      ? supabase.from('users').select('id, role, branch_id, full_name').eq('branch_id', managerBranchId)
+                      : role === 'officer'
+                        ? supabase.from('users').select('id, role, branch_id, full_name').eq('id', user.id)
+                        : supabase.from('users').select('*');
+
+            const branchesQuery =
+                role === 'manager' && managerBranchId
+                    ? supabase.from('branches').select('*').eq('id', managerBranchId)
+                    : supabase.from('branches').select('*');
+
+            const [configRes, loansRes, repaymentsRes, usersRes, branchesRes, productsRes, groupsRes] =
+                await Promise.all([
+                    supabase.from('system_config').select('value').eq('key', 'currency').single(),
+                    loansQuery,
+                    repaymentsListQuery,
+                    usersQuery,
+                    branchesQuery,
+                    supabase.from('loan_products').select('*'),
+                    groupsProm,
+                ]);
+
             setCurrency(checkError(configRes, 'config')?.value || 'TZS');
             setAllData({
                 loans: checkError(loansRes, 'loans'),
-                borrowers: checkError(borrowersRes, 'borrowers'),
+                borrowers: [],
                 repayments: checkError(repaymentsRes, 'repayments'),
                 users: checkError(usersRes, 'users'),
                 branches: checkError(branchesRes, 'branches'),
                 loanProducts: checkError(productsRes, 'products'),
-                centers: checkError(centersRes, 'centers'),
+                centers: centersData,
                 groups: checkError(groupsRes, 'groups'),
             });
-            
+
             if (user?.user_metadata.role === 'manager') {
                 setSelectedBranch(user.user_metadata.branch_id);
             }
