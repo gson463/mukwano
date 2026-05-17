@@ -1,5 +1,6 @@
 import path from 'node:path';
 import react from '@vitejs/plugin-react';
+import { VitePWA } from 'vite-plugin-pwa';
 import { createLogger, defineConfig } from 'vite';
 import inlineEditPlugin from './plugins/visual-editor/vite-plugin-react-inline-editor.js';
 import editModeDevPlugin from './plugins/visual-editor/vite-plugin-edit-mode.js';
@@ -282,7 +283,54 @@ export default defineConfig({
 	plugins: [
 		...(isDev ? [inlineEditPlugin(), editModeDevPlugin(), iframeRouteRestorationPlugin(), selectionModePlugin()] : []),
 		react(),
-		addTransformIndexHtml
+		addTransformIndexHtml,
+		VitePWA({
+			registerType: 'autoUpdate',
+			injectRegister: 'auto',
+			includeAssets: ['mukwano-financial-services-logo.png'],
+			manifest: {
+				name: 'Mukwano Financial Services',
+				short_name: 'Mukwano',
+				description: 'Microfinance loan and repayment management.',
+				theme_color: '#166534',
+				background_color: '#f9fafb',
+				display: 'standalone',
+				orientation: 'portrait-primary',
+				scope: '/',
+				start_url: '/',
+				icons: [
+					{
+						src: 'mukwano-financial-services-logo.png',
+						sizes: '192x192',
+						type: 'image/png',
+						purpose: 'any',
+					},
+					{
+						src: 'mukwano-financial-services-logo.png',
+						sizes: '512x512',
+						type: 'image/png',
+						purpose: 'any',
+					},
+					{
+						src: 'mukwano-financial-services-logo.png',
+						sizes: '512x512',
+						type: 'image/png',
+						purpose: 'maskable',
+					},
+				],
+			},
+			workbox: {
+				globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
+				maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
+				navigateFallback: '/index.html',
+				navigateFallbackDenylist: [/\.[^/]+$/, /^\/__/],
+				cleanupOutdatedCaches: true,
+				clientsClaim: true,
+			},
+			devOptions: {
+				enabled: false,
+			},
+		}),
 	],
 	server: {
 		cors: true,
