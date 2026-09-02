@@ -22,6 +22,17 @@ import * as XLSX from 'xlsx';
 import { getTodayDateString } from '@/utils/dateValidation';
 import { getDisabledDates, isNonWorkingDay } from '@/utils/holidayUtils';
 import { statCardIconWellClass } from '@/lib/utils';
+import {
+    getInstallmentUnitFromSchedule,
+    isValidRepaymentAmount,
+    repaymentAmountValidationMessage,
+    REPAYMENT_AMOUNT_INVALID_FALLBACK,
+} from '@/lib/repaymentInstallmentUnit.js';
+import {
+    normalizeWalletPrepaymentSplitMode,
+    scheduledDueRpcName,
+} from '@/lib/walletPrepaymentSplitMode.js';
+import { prepaymentAmount, scheduledRepaymentAmount } from '@/lib/repaymentPrepayment.js';
 
 const EAT_TIMEZONE = 'Africa/Nairobi';
 const REPAYMENT_PAGE_SIZE = 10;
@@ -57,11 +68,14 @@ const RepaymentManagement = () => {
     const [selectedLoanForSchedule, setSelectedLoanForSchedule] = useState(null);
     const [isRefreshingSchedule, setIsRefreshingSchedule] = useState(false);
     const [holidays, setHolidays] = useState([]);
+    const [walletPrepaymentSplitMode, setWalletPrepaymentSplitMode] = useState('standard');
+    const [pickerTotalDueOnOrBefore, setPickerTotalDueOnOrBefore] = useState(null);
 
     // Repayment Form State
     const [repaymentFormData, setRepaymentFormData] = useState({
         loanId: '',
-        amount: '',
+        scheduled_portion: '',
+        prepayment_portion: '',
         paymentDate: getTodayDateString(),
     });
     const [formErrors, setFormErrors] = useState({});
@@ -94,13 +108,15 @@ const RepaymentManagement = () => {
     };
     
     const resetRepaymentForm = () => {
-        setRepaymentFormData({ 
-            loanId: '', 
-            amount: '', 
+        setRepaymentFormData({
+            loanId: '',
+            scheduled_portion: '',
+            prepayment_portion: '',
             paymentDate: getTodayDateString(),
         });
         setFormErrors({});
-    }
+        setPickerTotalDueOnOrBefore(null);
+    };
 
     // Fetch Context Data (Loans, Groups, Config) - Only on Mount
     const fetchContextData = useCallback(async () => {
@@ -108,8 +124,16 @@ const RepaymentManagement = () => {
         setLoading(true);
         try {
             await supabase.rpc('update_all_loan_statuses');
-            const { data: config } = await supabase.from('system_config').select('value').eq('key', 'currency').single();
-            if (config) setCurrency(config.value);
+            const { data: configRows } = await supabase
+                .from('system_config')
+                .select('key, value')
+                .in('key', ['currency', 'walletPrepaymentSplitMode']);
+            for (const row of configRows || []) {
+                if (row.key === 'currency') setCurrency(row.value);
+                if (row.key === 'walletPrepaymentSplitMode') {
+                    setWalletPrepaymentSplitMode(normalizeWalletPrepaymentSplitMode(row.value));
+                }
+            }
 
             const { data: profileRow } = await supabase.from('users').select('branch_id').eq('id', user.id).maybeSingle();
             const branchId = profileRow?.branch_id ?? null;
@@ -201,6 +225,48 @@ const RepaymentManagement = () => {
         if (!repaymentDialogOpen) return;
         setRepaymentFormData((prev) => ({ ...prev, paymentDate: getTodayDateString() }));
     }, [repaymentDialogOpen]);
+
+    useEffect(() => {
+        const loanId = repaymentFormData.loanId;
+        if (!loanId) {
+            setPickerTotalDueOnOrBefore(null);
+            return;
+        }
+        const loan = loans.find((l) => l.id === loanId);
+        if (!loan) {
+            setPickerTotalDueOnOrBefore(null);
+            return;
+        }
+        const payStr = getTodayDateString();
+        const dueRpc = scheduledDueRpcName(walletPrepaymentSplitMode);
+        let cancelled = false;
+        (async () => {
+            const { data, error } = await supabase.rpc(dueRpc, {
+                p_schedule: loan.schedule ?? null,
+                p_payment_date: payStr,
+            });
+            if (cancelled) return;
+            if (error) {
+                setPickerTotalDueOnOrBefore(null);
+                return;
+            }
+            setPickerTotalDueOnOrBefore(Number(data ?? 0));
+        })();
+        return () => {
+            cancelled = true;
+        };
+    }, [repaymentFormData.loanId, loans, walletPrepaymentSplitMode]);
+
+    const repaymentFormTotal = useMemo(() => {
+        const s = parseFloat(String(repaymentFormData.scheduled_portion || '').replace(/,/g, '')) || 0;
+        const p = parseFloat(String(repaymentFormData.prepayment_portion || '').replace(/,/g, '')) || 0;
+        return s + p;
+    }, [repaymentFormData.scheduled_portion, repaymentFormData.prepayment_portion]);
+
+    const pickerInstallmentUnit = useMemo(() => {
+        const loan = loans.find((l) => l.id === repaymentFormData.loanId);
+        return loan ? getInstallmentUnitFromSchedule(loan.schedule) : null;
+    }, [repaymentFormData.loanId, loans]);
 
     // React to Date Changes
     useEffect(() => {
@@ -313,16 +379,15 @@ const RepaymentManagement = () => {
 
     const canRecordRepayment = useMemo(() => {
         const todayYmd = getTodayDateString();
-        const { loanId, amount } = repaymentFormData;
-        if (!loanId || !amount) return false;
-        if (parseFloat(String(amount)) <= 0) return false;
+        const { loanId } = repaymentFormData;
+        if (!loanId || repaymentFormTotal <= 0) return false;
         if (isNonWorkingDay(todayYmd, holidays)) return false;
         const selectedLoan = loans.find((l) => l.id === loanId);
         if (!selectedLoan) return false;
-        if (parseFloat(String(amount)) > selectedLoan.balance) return false;
+        if (repaymentFormTotal > selectedLoan.balance) return false;
         if (selectedLoan.disbursement_date && todayYmd < selectedLoan.disbursement_date) return false;
         return true;
-    }, [repaymentFormData, loans, holidays]);
+    }, [repaymentFormData, loans, holidays, repaymentFormTotal]);
 
     const handleViewSchedule = async (loan) => {
         setIsRefreshingSchedule(true);
@@ -359,30 +424,42 @@ const RepaymentManagement = () => {
 
     const validateForm = () => {
         const errors = {};
-        const { loanId, amount } = repaymentFormData;
+        const { loanId, scheduled_portion, prepayment_portion } = repaymentFormData;
+        const schedNum = parseFloat(String(scheduled_portion || '').replace(/,/g, '')) || 0;
+        const prepNum = parseFloat(String(prepayment_portion || '').replace(/,/g, '')) || 0;
+        const total = schedNum + prepNum;
 
-        if (!loanId) errors.loanId = "Please select a loan.";
-        if (!amount || parseFloat(amount) <= 0) errors.amount = "Amount must be greater than zero.";
+        if (!loanId) errors.loanId = 'Please select a loan.';
+        if (total <= 0) errors.total = 'Enter scheduled repayment and/or prepayment (total must be greater than zero).';
+        if (schedNum < 0 || prepNum < 0) errors.total = 'Amounts must be non-negative.';
+
         const todayYmd = getTodayDateString();
         if (isNonWorkingDay(todayYmd, holidays)) {
             errors.paymentDate =
-                "Today (EAT) is not a working day (Sunday or public holiday). You cannot record a repayment today.";
+                'Today (EAT) is not a working day (Sunday or public holiday). You cannot record a repayment today.';
         }
 
-        const selectedLoan = loans.find(l => l.id === loanId);
+        const selectedLoan = loans.find((l) => l.id === loanId);
         if (selectedLoan) {
-            if (parseFloat(amount) > selectedLoan.balance) {
-                errors.amount = `Amount cannot exceed outstanding balance (${currency} ${selectedLoan.balance.toLocaleString()})`;
+            if (total > selectedLoan.balance) {
+                errors.total = `Total cannot exceed outstanding balance (${currency} ${selectedLoan.balance.toLocaleString()})`;
             }
             if (selectedLoan.disbursement_date && todayYmd < selectedLoan.disbursement_date) {
                 errors.paymentDate = `Repayment date cannot be before the loan disbursement date (${selectedLoan.disbursement_date})`;
+            }
+            const unit = getInstallmentUnitFromSchedule(selectedLoan.schedule);
+            const due = Number(pickerTotalDueOnOrBefore ?? 0);
+            if (total > 0 && !isValidRepaymentAmount(total, due, unit)) {
+                errors.total =
+                    repaymentAmountValidationMessage(total, due, unit, currency) ||
+                    REPAYMENT_AMOUNT_INVALID_FALLBACK;
             }
         }
 
         setFormErrors(errors);
         return Object.keys(errors).length === 0;
     };
-    
+
     const handleRecordRepayment = async () => {
         if (!validateForm()) return;
         const pd = getTodayDateString();
@@ -395,40 +472,57 @@ const RepaymentManagement = () => {
             });
             return;
         }
-        
-        setIsSubmitting(true);
-        const { loanId, amount } = repaymentFormData;
 
+        setIsSubmitting(true);
+        const { loanId, scheduled_portion, prepayment_portion } = repaymentFormData;
+        const schedNum = parseFloat(String(scheduled_portion || '').replace(/,/g, '')) || 0;
+        const prepNum = parseFloat(String(prepayment_portion || '').replace(/,/g, '')) || 0;
+        const total = schedNum + prepNum;
         const recordedOn = getTodayDateString();
+
         const { data, error } = await supabase.functions.invoke('record-repayment', {
             body: {
                 loan_id: loanId,
-                amount: parseFloat(amount),
-                officer_id: user.id,
+                amount: total,
+                scheduled_portion: schedNum,
+                prepayment_portion: prepNum,
+                wallet_split_explicit: true,
                 actual_payment_date: recordedOn,
             },
         });
 
-        if (error) {
-            toast({ title: 'Repayment Failed', description: error.message, variant: 'destructive' });
+        const apiError = error?.message || data?.error;
+        if (apiError) {
+            toast({ title: 'Repayment Failed', description: String(apiError), variant: 'destructive' });
         } else {
-             const selectedLoan = loans.find(l => l.id === loanId);
-             const borrowerName = selectedLoan ? `${selectedLoan.borrowers.first_name} ${selectedLoan.borrowers.surname}` : 'Borrower';
-             
-            toast({ 
-                title: 'Repayment Recorded!', 
+            const selectedLoan = loans.find((l) => l.id === loanId);
+            const borrowerName = selectedLoan
+                ? `${selectedLoan.borrowers.first_name} ${selectedLoan.borrowers.surname}`
+                : 'Borrower';
+
+            toast({
+                title: 'Repayment Recorded!',
                 description: (
                     <div className="flex flex-col gap-1">
-                        <p>Successfully recorded payment of <strong>{currency} {parseFloat(amount).toLocaleString()}</strong></p>
-                        <p className="text-xs text-muted-foreground">For: {borrowerName} on {format(parse(recordedOn, 'yyyy-MM-dd', new Date()), 'MMM dd, yyyy')}</p>
+                        <p>
+                            Scheduled: <strong>{currency} {schedNum.toLocaleString()}</strong>
+                            {prepNum > 0 ? (
+                                <>
+                                    {' '}
+                                    · Prepayment: <strong>{currency} {prepNum.toLocaleString()}</strong>
+                                </>
+                            ) : null}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                            For: {borrowerName} on {format(parse(recordedOn, 'yyyy-MM-dd', new Date()), 'MMM dd, yyyy')}
+                        </p>
                     </div>
                 ),
-                className: "bg-green-50 border-green-200"
+                className: 'bg-green-50 border-green-200',
             });
             setRepaymentDialogOpen(false);
-            // Refresh logic - if recorded for today, it should appear in today view
-            fetchRepayments(); 
-            // Also refresh balances
+            resetRepaymentForm();
+            fetchRepayments();
             fetchContextData();
         }
         setIsSubmitting(false);
@@ -636,27 +730,80 @@ const RepaymentManagement = () => {
                                     {formErrors.loanId && <p className="text-xs text-red-500 font-medium animate-in fade-in slide-in-from-top-1">{formErrors.loanId}</p>}
                                 </div>
 
-                                {/* Amount */}
+                                {/* Scheduled repayment */}
                                 <div className="space-y-2">
                                     <Label className="text-sm font-semibold text-gray-700 flex items-center gap-2">
                                         <Coins className="w-4 h-4 text-yellow-500" />
-                                        Repayment Amount ({currency}) *
+                                        Scheduled repayment ({currency})
                                     </Label>
-                                    <div className="relative">
-                                        <Input
-                                            type="number"
-                                            value={repaymentFormData.amount}
-                                            onChange={(e) => {
-                                                setRepaymentFormData({ ...repaymentFormData, amount: e.target.value });
-                                                setFormErrors({...formErrors, amount: null});
-                                            }}
-                                            placeholder="0.00"
-                                            className={`pl-4 h-11 text-lg font-medium transition-all ${formErrors.amount ? 'border-red-500 ring-red-200' : 'border-gray-200 focus:ring-yellow-200 focus:border-yellow-500'}`}
-                                            min="0"
-                                        />
-                                    </div>
-                                    {formErrors.amount && <p className="text-xs text-red-500 font-medium animate-in fade-in slide-in-from-top-1">{formErrors.amount}</p>}
+                                    <p className="text-xs text-muted-foreground">
+                                        Arrears + due today
+                                        {pickerTotalDueOnOrBefore != null
+                                            ? ` · due now: ${currency} ${Number(pickerTotalDueOnOrBefore).toLocaleString()}`
+                                            : ''}
+                                    </p>
+                                    <Input
+                                        type="number"
+                                        value={repaymentFormData.scheduled_portion}
+                                        onChange={(e) => {
+                                            setRepaymentFormData({ ...repaymentFormData, scheduled_portion: e.target.value });
+                                            setFormErrors({ ...formErrors, total: null });
+                                        }}
+                                        placeholder="0.00"
+                                        className={`h-11 text-lg font-medium transition-all ${formErrors.total ? 'border-red-500 ring-red-200' : 'border-gray-200 focus:ring-yellow-200 focus:border-yellow-500'}`}
+                                        min="0"
+                                    />
                                 </div>
+
+                                {/* Prepayment */}
+                                <div className="space-y-2">
+                                    <Label className="text-sm font-semibold text-gray-700 flex items-center gap-2">
+                                        <TrendingUp className="w-4 h-4 text-emerald-600" />
+                                        Prepayment ({currency})
+                                    </Label>
+                                    <p className="text-xs text-muted-foreground">
+                                        Pays future installments (kesho kwanza). Mteja asionekane kwenye Group Repayment siku aliyoprepay.
+                                    </p>
+                                    <Input
+                                        type="number"
+                                        value={repaymentFormData.prepayment_portion}
+                                        onChange={(e) => {
+                                            setRepaymentFormData({ ...repaymentFormData, prepayment_portion: e.target.value });
+                                            setFormErrors({ ...formErrors, total: null });
+                                        }}
+                                        placeholder="0.00"
+                                        className={`h-11 text-lg font-medium transition-all ${formErrors.total ? 'border-red-500 ring-red-200' : 'border-gray-200 focus:ring-emerald-200 focus:border-emerald-500'}`}
+                                        min="0"
+                                    />
+                                </div>
+
+                                {/* Total */}
+                                <div className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3">
+                                    <div className="flex items-center justify-between">
+                                        <span className="text-sm font-semibold text-gray-700">Total repayment</span>
+                                        <span className="text-lg font-bold text-gray-900">
+                                            {currency}{' '}
+                                            {repaymentFormTotal.toLocaleString(undefined, {
+                                                minimumFractionDigits: 2,
+                                                maximumFractionDigits: 2,
+                                            })}
+                                        </span>
+                                    </div>
+                                    {pickerInstallmentUnit != null && (
+                                        <p className="mt-1 text-xs text-muted-foreground">
+                                            Installment unit: {currency}{' '}
+                                            {pickerInstallmentUnit.toLocaleString(undefined, {
+                                                minimumFractionDigits: 2,
+                                                maximumFractionDigits: 2,
+                                            })}
+                                        </p>
+                                    )}
+                                </div>
+                                {formErrors.total && (
+                                    <p className="text-xs text-red-500 font-medium animate-in fade-in slide-in-from-top-1">
+                                        {formErrors.total}
+                                    </p>
+                                )}
 
                                 {/* Payment business date = today (EAT) only — not editable */}
                                 <div className="space-y-2">
@@ -691,7 +838,7 @@ const RepaymentManagement = () => {
 
                 {/* Stats */}
                 <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-                    <StatCard title="Total Collections" value={`${currency} ${stats.totalPaid.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} icon={ArrowRightLeft} color="text-primary" />
+                    <StatCard title="Total Repayments" value={`${currency} ${stats.totalPaid.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} icon={ArrowRightLeft} color="text-primary" />
                     <StatCard title="Interest Collected" value={`${currency} ${stats.totalInterest.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} icon={TrendingUp} color="text-green-600" />
                     <StatCard title="Principal Returned" value={`${currency} ${stats.totalPrincipalPaid.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} icon={TrendingDown} color="text-orange-600" />
                     <StatCard title="Outstanding Portfolio" value={`${currency} ${stats.totalOutstandingPrincipal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} icon={Scale} color="text-red-600" />
@@ -892,6 +1039,12 @@ const RepaymentManagement = () => {
                                         <TableHead className="border border-slate-300 bg-slate-100 px-2 py-2 text-xs font-semibold uppercase tracking-wide text-slate-800 dark:border-slate-600 dark:bg-slate-800/90 dark:text-slate-100">
                                             Total
                                         </TableHead>
+                                        <TableHead className="border border-slate-300 bg-slate-100 px-2 py-2 text-xs font-semibold uppercase tracking-wide text-slate-800 dark:border-slate-600 dark:bg-slate-800/90 dark:text-slate-100">
+                                            Scheduled
+                                        </TableHead>
+                                        <TableHead className="border border-slate-300 bg-slate-100 px-2 py-2 text-xs font-semibold uppercase tracking-wide text-slate-800 dark:border-slate-600 dark:bg-slate-800/90 dark:text-slate-100">
+                                            Prepayment
+                                        </TableHead>
                                         <TableHead className="min-w-[7rem] border border-slate-300 bg-slate-100 px-2 py-2 text-right text-xs font-semibold uppercase tracking-wide text-slate-800 dark:border-slate-600 dark:bg-slate-800/90 dark:text-slate-100">
                                             Actions
                                         </TableHead>
@@ -901,7 +1054,7 @@ const RepaymentManagement = () => {
                                     {repaymentsLoading ? (
                                         <TableRow>
                                             <TableCell
-                                                colSpan={7}
+                                                colSpan={9}
                                                 className="h-48 border border-slate-300 text-center text-muted-foreground dark:border-slate-600"
                                             >
                                                 <Loader2 className="mx-auto h-8 w-8 animate-spin text-primary" />
@@ -958,6 +1111,18 @@ const RepaymentManagement = () => {
                                                         })}
                                                     </Badge>
                                                 </TableCell>
+                                                <TableCell className="border border-slate-300 tabular-nums dark:border-slate-600">
+                                                    {currency}{' '}
+                                                    {scheduledRepaymentAmount(r).toLocaleString(undefined, {
+                                                        minimumFractionDigits: 2,
+                                                    })}
+                                                </TableCell>
+                                                <TableCell className="border border-slate-300 tabular-nums dark:border-slate-600">
+                                                    {currency}{' '}
+                                                    {prepaymentAmount(r).toLocaleString(undefined, {
+                                                        minimumFractionDigits: 2,
+                                                    })}
+                                                </TableCell>
                                                 <TableCell className="border border-slate-300 p-1.5 text-right dark:border-slate-600">
                                                     <div className="flex flex-nowrap items-center justify-end gap-1">
                                                         <AlertDialog>
@@ -1013,7 +1178,7 @@ const RepaymentManagement = () => {
                                     ) : (
                                         <TableRow>
                                             <TableCell
-                                                colSpan={7}
+                                                colSpan={9}
                                                 className="h-40 border border-slate-300 text-center text-muted-foreground dark:border-slate-600"
                                             >
                                                 <div className="flex flex-col items-center justify-center gap-2">
