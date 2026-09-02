@@ -737,9 +737,9 @@ const RepaymentManagement = () => {
                                         Scheduled repayment ({currency})
                                     </Label>
                                     <p className="text-xs text-muted-foreground">
-                                        Arrears + due today
+                                        Overdue balance and today&apos;s installment due on the payment date.
                                         {pickerTotalDueOnOrBefore != null
-                                            ? ` · due now: ${currency} ${Number(pickerTotalDueOnOrBefore).toLocaleString()}`
+                                            ? ` Amount due: ${currency} ${Number(pickerTotalDueOnOrBefore).toLocaleString()}.`
                                             : ''}
                                     </p>
                                     <Input
@@ -762,7 +762,8 @@ const RepaymentManagement = () => {
                                         Prepayment ({currency})
                                     </Label>
                                     <p className="text-xs text-muted-foreground">
-                                        Pays future installments (kesho kwanza). Mteja asionekane kwenye Group Repayment siku aliyoprepay.
+                                        Advance payment applied to upcoming installments, starting with the next due date.
+                                        Fully prepaid days are excluded from Group Repayment.
                                     </p>
                                     <Input
                                         type="number"
