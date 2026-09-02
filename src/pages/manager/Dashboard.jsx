@@ -11,7 +11,7 @@ import { motion } from 'framer-motion';
 import { Button } from '@/components/ui/button';
 import { Calendar } from '@/components/ui/calendar';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { supabase } from '@/lib/customSupabaseClient';
+import { getManagerBranchId } from '@/lib/managerBranch';
 import { useToast } from '@/components/ui/use-toast';
 const StatCard = ({ title, value, icon: Icon, gradient, onClick }) => (
   <Card
@@ -83,14 +83,16 @@ const BranchManagerDashboard = () => {
   });
 
   const fetchDashboardData = useCallback(async (start, end) => {
-      if (!user || !user.user_metadata.branch_id) return;
+      if (!user) return;
+      const branchId = await getManagerBranchId(user);
+      if (!branchId) return;
       setLoading(true);
       try {
           const { data: configData } = await supabase.from('system_config').select('value').eq('key', 'currency').single();
           if (configData) setCurrency(configData.value);
 
           const params = {
-            p_branch_id: user.user_metadata.branch_id,
+            p_branch_id: branchId,
             p_start_date: format(start, 'yyyy-MM-dd'),
             p_end_date: format(end, 'yyyy-MM-dd'),
           };

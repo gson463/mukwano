@@ -17,6 +17,7 @@ import { toZonedTime, format as formatTZ } from 'date-fns-tz';
 import { getDisabledDates } from '@/utils/holidayUtils';
 import { BorrowerSearchSelect } from '@/components/BorrowerSearchSelect';
 import { statCardIconWellClass } from '@/lib/utils';
+import { getManagerBranchId } from '@/lib/managerBranch';
 import {
     excelEmptyStateCellClassName,
     excelTableClassName,
@@ -69,7 +70,9 @@ const ManagerLoanManagement = () => {
     const [currentPage, setCurrentPage] = useState(1);
 
     const fetchData = useCallback(async () => {
-        if (!user || !user.user_metadata.branch_id) return;
+        if (!user) return;
+        const branchId = await getManagerBranchId(user);
+        if (!branchId) return;
         setLoading(true);
 
         const { data: config } = await supabase.from('system_config').select('value').eq('key', 'currency').single();
@@ -78,7 +81,7 @@ const ManagerLoanManagement = () => {
         const { data: officersData, error: officersError } = await supabase
             .from('users')
             .select('id, full_name')
-            .eq('branch_id', user.user_metadata.branch_id)
+            .eq('branch_id', branchId)
             .eq('role', 'officer');
             
         if (officersError) {
@@ -111,7 +114,7 @@ const ManagerLoanManagement = () => {
         const { data: centersData, error: centersError } = await supabase
             .from('centers')
             .select('id, name, branch_id, loan_officer_id')
-            .eq('branch_id', user.user_metadata.branch_id)
+            .eq('branch_id', branchId)
             .order('name');
 
         const { data: groupsData, error: groupsError } = await supabase.from('groups').select('*').in('loan_officer_id', officerIds);
@@ -120,7 +123,7 @@ const ManagerLoanManagement = () => {
         const { data: borrowersData, error: borrowersError } = await supabase
             .from('borrowers')
             .select('id, first_name, surname, borrower_id, phone_number')
-            .eq('branch_id', user.user_metadata.branch_id);
+            .eq('branch_id', branchId);
 
         if (loansError || productsError || borrowersError || centersError || groupsError) {
             toast({

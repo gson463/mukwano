@@ -1,7 +1,8 @@
 -- Trigram name similarity: flag registrations where full name is very close to an existing borrower
--- (requires pg_trgm; enable in Supabase if CREATE EXTENSION fails — Dashboard → Database → Extensions)
+-- (requires pg_trgm in extensions schema; enable in Supabase Dashboard → Database → Extensions if missing)
 
-CREATE EXTENSION IF NOT EXISTS pg_trgm;
+CREATE SCHEMA IF NOT EXISTS extensions;
+CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA extensions;
 
 CREATE OR REPLACE FUNCTION public.find_similar_borrower_name(
   p_first_name text,
@@ -22,7 +23,7 @@ LANGUAGE sql
 STABLE
 PARALLEL SAFE
 SECURITY DEFINER
-SET search_path = public
+SET search_path = public, extensions
 AS $$
   WITH q AS (
     SELECT nullif(
@@ -38,7 +39,7 @@ AS $$
     b.surname,
     b.loan_officer_id,
     b.branch_id,
-    (similarity(
+    (extensions.similarity(
       (SELECT fullq FROM q),
       nullif(
         lower(trim(both regexp_replace(b.first_name, '\s+', ' ', 'g')) || ' ' ||
@@ -56,7 +57,7 @@ AS $$
         trim(both regexp_replace(b.surname, '\s+', ' ', 'g'))),
       ''
     ) IS NOT NULL
-    AND similarity(
+    AND extensions.similarity(
       (SELECT fullq FROM q),
       nullif(
         lower(trim(both regexp_replace(b.first_name, '\s+', ' ', 'g')) || ' ' ||

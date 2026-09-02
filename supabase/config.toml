@@ -1,0 +1,9 @@
+# Mukwano Microfinance — linked project jdwgpfyaygirkqyywvvj
+project_id = "jdwgpfyaygirkqyywvvj"
+
+[db]
+major_version = 17
+
+[api]
+schemas = ["public", "graphql_public"]
+max_rows = 1000

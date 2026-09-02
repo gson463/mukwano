@@ -6,7 +6,7 @@ import DashboardLayout from '@/components/layout/DashboardLayout';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
 import { supabase } from '@/lib/customSupabaseClient';
 import { useToast } from '@/components/ui/use-toast';
-import { getDashboardBasePath } from '@/lib/dashboardMetricLoaders';
+import { getManagerBranchId } from '@/lib/managerBranch';
 import { Button } from '@/components/ui/button';
 import { Calendar } from '@/components/ui/calendar';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -189,14 +189,19 @@ const NearingLoanCompletion = () => {
 
       if (role === 'officer') {
         q = q.eq('officer_id', user.id);
-      } else if (isManager && user.user_metadata?.branch_id) {
+      } else if (isManager) {
+        const branchId = await getManagerBranchId(user);
+        if (!branchId) {
+          setRows([]);
+          return;
+        }
         if (officerId !== 'all') {
           q = q.eq('officer_id', officerId);
         } else {
           const { data: offRows } = await supabase
             .from('users')
             .select('id')
-            .eq('branch_id', user.user_metadata.branch_id)
+            .eq('branch_id', branchId)
             .eq('role', 'officer');
           const oids = (offRows || []).map((o) => o.id);
           if (!oids.length) {

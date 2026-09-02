@@ -2,81 +2,35 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import DashboardLayout from '@/components/layout/DashboardLayout';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { SearchableSelect } from '@/components/ui/searchable-select';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Calendar } from '@/components/ui/calendar';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
+import { useUserProfileScope, fetchOfficerIdsForBranch } from '@/hooks/useUserProfileScope';
 import { supabase } from '@/lib/customSupabaseClient';
 import { useToast } from '@/components/ui/use-toast';
-import { Calendar as CalendarIcon, Printer, Users, Briefcase, DollarSign, TrendingUp, AlertTriangle, Search } from 'lucide-react';
-import { cn } from '@/lib/utils';
-import { format as formatDate, startOfMonth, endOfMonth, eachMonthOfInterval, startOfDay, endOfDay, startOfWeek, endOfWeek, startOfYear, endOfYear, differenceInDays, eachDayOfInterval } from 'date-fns';
+import { Calendar as CalendarIcon, Printer, Users, Briefcase, DollarSign, TrendingUp, AlertTriangle, PiggyBank } from 'lucide-react';
+import { format as formatDate, startOfMonth, endOfMonth, startOfDay, endOfDay, startOfWeek, endOfWeek, startOfYear, endOfYear, differenceInDays } from 'date-fns';
 import * as XLSX from 'xlsx';
 import { BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { format as formatTZ, toZonedTime } from 'date-fns-tz';
-
-const EAT_TIMEZONE = 'Africa/Nairobi';
-
-/** Exclude `schedule` and other large JSON from loans — was causing DB statement timeouts on reports. */
-const LOANS_FOR_REPORT_SELECT = [
-    'id',
-    'officer_id',
-    'borrower_id',
-    'product_id',
-    'status',
-    'principal',
-    'balance',
-    'loan_id',
-    'disbursement_date',
-    'borrowers!inner(id, first_name, surname, group_id, center_id, branch_id, borrower_id, phone_number, status, loan_officer_id, borrower_type)',
-].join(',');
-
-/** No nested `schedule` — the schedule JSON per loan made repayment export timeout. */
-const REPAYMENTS_FOR_REPORT_SELECT = [
-    'id',
-    'loan_id',
-    'officer_id',
-    'amount',
-    'principal_paid',
-    'interest_paid',
-    'actual_payment_date',
-    'loans(id, borrower_id, loan_id, product_id, status, borrowers(id, first_name, surname, group_id, center_id, branch_id, borrower_id, phone_number, borrower_type, groups(id, name, center_id)))',
-].join(',');
-
-/** Same as REPAYMENTS_FOR_REPORT_SELECT but inner-join loans+borrowers so branch filter runs in SQL (manager performance). */
-const REPAYMENTS_FOR_REPORT_SELECT_BRANCH_SCOPED = [
-    'id',
-    'loan_id',
-    'officer_id',
-    'amount',
-    'principal_paid',
-    'interest_paid',
-    'actual_payment_date',
-    'loans!inner(id, borrower_id, loan_id, product_id, status, borrowers!inner(id, first_name, surname, group_id, center_id, branch_id, borrower_id, phone_number, borrower_type, groups(id, name, center_id)))',
-].join(',');
-
-const StatCard = ({ title, value, icon: Icon, color }) => (
-  <Card>
-    <CardHeader className="flex flex-row items-center justify-between pb-2">
-      <CardTitle className="text-sm font-medium text-gray-600">{title}</CardTitle>
-      <Icon className={`h-5 w-5 ${color}`} />
-    </CardHeader>
-    <CardContent>
-      <div className="text-2xl font-bold">{value}</div>
-    </CardContent>
-  </Card>
-);
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { LOAN_STATUS_FILTER_OPTIONS } from '@/lib/domainStatuses';
+import { fetchReportsMetrics } from '@/lib/reportsMetricsRpc';
+import { KpiStatCard, KpiMoneyValue, KpiValue } from '@/components/ui/kpi-stat-card';
 
 const Reports = () => {
     const { user } = useAuth();
     const { toast } = useToast();
+    const { loading: profileLoading, branchId: profileBranchId, role: profileRole } = useUserProfileScope(user?.id);
+    const effectiveRole = profileRole ?? user?.user_metadata?.role;
+    const managerBranchScope = profileBranchId ?? user?.user_metadata?.branch_id;
     const [loading, setLoading] = useState(true);
     const [currency, setCurrency] = useState('TZS');
 
-    const [allData, setAllData] = useState({ loans: [], borrowers: [], repayments: [], users: [], branches: [], loanProducts: [], centers: [], groups: [] });
+    const [filterMeta, setFilterMeta] = useState({ users: [], branches: [], centers: [], groups: [], loanProducts: [] });
+    const [metrics, setMetrics] = useState(null);
+    const [metricsLoading, setMetricsLoading] = useState(false);
 
     const [dateRange, setDateRange] = useState({ from: startOfMonth(new Date()), to: endOfMonth(new Date()) });
     const [activeDateFilter, setActiveDateFilter] = useState('monthly');
@@ -87,127 +41,144 @@ const Reports = () => {
     const [selectedCenter, setSelectedCenter] = useState('all');
     const [selectedGroup, setSelectedGroup] = useState('all');
     const [selectedStatus, setSelectedStatus] = useState('all');
-    const [searchQuery, setSearchQuery] = useState('');
 
-    const fetchData = useCallback(async () => {
+    const fetchFilterMeta = useCallback(async () => {
         if (!user) return;
+        if (profileLoading) {
+            setLoading(true);
+            return;
+        }
         setLoading(true);
 
-        const repayFrom = dateRange?.from
-            ? formatDate(startOfDay(dateRange.from), 'yyyy-MM-dd')
-            : formatDate(startOfDay(startOfMonth(new Date())), 'yyyy-MM-dd');
-        const repayTo = dateRange?.to
-            ? formatDate(endOfDay(dateRange.to), 'yyyy-MM-dd')
-            : dateRange?.from
-              ? formatDate(endOfDay(dateRange.from), 'yyyy-MM-dd')
-              : formatDate(endOfDay(endOfMonth(new Date())), 'yyyy-MM-dd');
+        const checkError = (res, name) => {
+            if (res.error) throw new Error(`Failed to fetch ${name}: ${res.error.message}`);
+            return res.data;
+        };
 
         try {
-            const checkError = (res, name) => {
-                if (res.error) throw new Error(`Failed to fetch ${name}: ${res.error.message}`);
-                return res.data;
-            };
+            const role = effectiveRole;
+            const cfgP = supabase.from('system_config').select('value').eq('key', 'currency').single();
+            const prodP = supabase.from('loan_products').select('*');
 
-            const role = user?.user_metadata?.role;
-            const managerBranchId = user?.user_metadata?.branch_id ?? null;
-
-            // Centres first — manager needs IDs to constrain groups query (avoid loading all centres/groups)
-            const centersQuery =
-                role === 'manager' && managerBranchId
-                    ? supabase.from('centers').select('*').eq('branch_id', managerBranchId)
-                    : role === 'officer'
-                      ? supabase.from('centers').select('*').eq('loan_officer_id', user.id)
-                      : supabase.from('centers').select('*');
-
-            const centersRes = await centersQuery;
-            if (centersRes.error) throw new Error(`Failed to fetch centers: ${centersRes.error.message}`);
-            const centersData = centersRes.data || [];
-            const centerIds = centersData.map((c) => c.id);
-
-            const groupsProm =
-                role === 'manager' && managerBranchId && centerIds.length === 0
-                    ? Promise.resolve({ data: [], error: null })
-                    : role === 'manager' && managerBranchId
-                      ? supabase.from('groups').select('*').in('center_id', centerIds)
-                      : role === 'officer'
-                        ? supabase.from('groups').select('*').eq('loan_officer_id', user.id)
-                        : supabase.from('groups').select('*');
-
-            let repaymentsListQuery = supabase
-                .from('repayments')
-                .select(
-                    role === 'manager' && managerBranchId
-                        ? REPAYMENTS_FOR_REPORT_SELECT_BRANCH_SCOPED
-                        : REPAYMENTS_FOR_REPORT_SELECT,
-                )
-                .gte('actual_payment_date', repayFrom)
-                .lte('actual_payment_date', repayTo)
-                .order('actual_payment_date', { ascending: false });
-
-            if (role === 'manager' && managerBranchId) {
-                repaymentsListQuery = repaymentsListQuery.eq('loans.borrowers.branch_id', managerBranchId);
-            } else if (role === 'officer') {
-                repaymentsListQuery = repaymentsListQuery.eq('officer_id', user.id);
-            }
-
-            let loansQuery = supabase.from('loans').select(LOANS_FOR_REPORT_SELECT);
-            if (role === 'manager' && managerBranchId) {
-                loansQuery = loansQuery.eq('borrowers.branch_id', managerBranchId);
-            } else if (role === 'officer') {
-                loansQuery = loansQuery.eq('officer_id', user.id);
-            }
-
-            let usersQuery =
-                role === 'admin'
-                    ? supabase.from('users').select('*')
-                    : role === 'manager' && managerBranchId
-                      ? supabase.from('users').select('id, role, branch_id, full_name').eq('branch_id', managerBranchId)
-                      : role === 'officer'
-                        ? supabase.from('users').select('id, role, branch_id, full_name').eq('id', user.id)
-                        : supabase.from('users').select('*');
-
-            const branchesQuery =
-                role === 'manager' && managerBranchId
-                    ? supabase.from('branches').select('*').eq('id', managerBranchId)
-                    : supabase.from('branches').select('*');
-
-            const [configRes, loansRes, repaymentsRes, usersRes, branchesRes, productsRes, groupsRes] =
-                await Promise.all([
-                    supabase.from('system_config').select('value').eq('key', 'currency').single(),
-                    loansQuery,
-                    repaymentsListQuery,
-                    usersQuery,
-                    branchesQuery,
-                    supabase.from('loan_products').select('*'),
-                    groupsProm,
+            if (role === 'admin') {
+                const [configRes, usersRes, branchesRes, productsRes, centersRes, groupsRes] = await Promise.all([
+                    cfgP,
+                    supabase.from('users').select('*'),
+                    supabase.from('branches').select('*'),
+                    prodP,
+                    supabase.from('centers').select('*'),
+                    supabase.from('groups').select('*'),
                 ]);
-
-            setCurrency(checkError(configRes, 'config')?.value || 'TZS');
-            setAllData({
-                loans: checkError(loansRes, 'loans'),
-                borrowers: [],
-                repayments: checkError(repaymentsRes, 'repayments'),
-                users: checkError(usersRes, 'users'),
-                branches: checkError(branchesRes, 'branches'),
-                loanProducts: checkError(productsRes, 'products'),
-                centers: centersData,
-                groups: checkError(groupsRes, 'groups'),
-            });
-
-            if (user?.user_metadata.role === 'manager') {
-                setSelectedBranch(user.user_metadata.branch_id);
+                setCurrency(checkError(configRes, 'config')?.value || 'TZS');
+                setFilterMeta({
+                    users: checkError(usersRes, 'users') || [],
+                    branches: checkError(branchesRes, 'branches') || [],
+                    loanProducts: checkError(productsRes, 'products') || [],
+                    centers: checkError(centersRes, 'centers') || [],
+                    groups: checkError(groupsRes, 'groups') || [],
+                });
+            } else if (role === 'manager') {
+                const branchId = managerBranchScope;
+                if (!branchId) {
+                    throw new Error('Branch not assigned to your profile.');
+                }
+                const officerIds = await fetchOfficerIdsForBranch(branchId);
+                const [configRes, usersRes, branchesRes, productsRes, centersRes] = await Promise.all([
+                    cfgP,
+                    supabase.from('users').select('*').eq('branch_id', branchId),
+                    supabase.from('branches').select('*').eq('id', branchId),
+                    prodP,
+                    supabase.from('centers').select('*').eq('branch_id', branchId),
+                ]);
+                const centerRows = checkError(centersRes, 'centers') || [];
+                const centerIds = centerRows.map((c) => c.id);
+                let groups = [];
+                if (centerIds.length > 0) {
+                    const groupsRes = await supabase.from('groups').select('*').in('center_id', centerIds);
+                    groups = checkError(groupsRes, 'groups') || [];
+                }
+                setCurrency(checkError(configRes, 'config')?.value || 'TZS');
+                setFilterMeta({
+                    users: checkError(usersRes, 'users') || [],
+                    branches: checkError(branchesRes, 'branches') || [],
+                    loanProducts: checkError(productsRes, 'products') || [],
+                    centers: centerRows,
+                    groups,
+                });
+                setSelectedBranch(branchId);
+                if (officerIds.length === 0) {
+                    setSelectedOfficer('all');
+                }
+            } else if (role === 'officer') {
+                const branchId = managerBranchScope;
+                const [configRes, usersRes, branchesRes, productsRes, centersRes, groupsRes] = await Promise.all([
+                    cfgP,
+                    supabase.from('users').select('*').eq('id', user.id),
+                    branchId
+                        ? supabase.from('branches').select('*').eq('id', branchId)
+                        : Promise.resolve({ data: [], error: null }),
+                    prodP,
+                    supabase.from('centers').select('*').eq('loan_officer_id', user.id),
+                    supabase.from('groups').select('*').eq('loan_officer_id', user.id),
+                ]);
+                setCurrency(checkError(configRes, 'config')?.value || 'TZS');
+                setFilterMeta({
+                    users: checkError(usersRes, 'users') || [],
+                    branches: checkError(branchesRes, 'branches') || [],
+                    loanProducts: checkError(productsRes, 'products') || [],
+                    centers: checkError(centersRes, 'centers') || [],
+                    groups: checkError(groupsRes, 'groups') || [],
+                });
+            } else {
+                setFilterMeta({ users: [], branches: [], centers: [], groups: [], loanProducts: [] });
             }
-
         } catch (error) {
-            toast({ title: 'Error fetching report data', description: error.message, variant: 'destructive' });
+            toast({ title: 'Error loading filters', description: error.message, variant: 'destructive' });
         } finally {
             setLoading(false);
         }
-    }, [user, toast, dateRange]);
+    }, [user, toast, profileLoading, effectiveRole, managerBranchScope]);
+
+    const metricsParams = useMemo(() => {
+        if (!dateRange?.from) return null;
+        const to = dateRange.to || dateRange.from;
+        const daysDiff = differenceInDays(to, dateRange.from);
+        return {
+            startDate: formatDate(dateRange.from, 'yyyy-MM-dd'),
+            endDate: formatDate(to, 'yyyy-MM-dd'),
+            branchId: selectedBranch,
+            officerId: selectedOfficer,
+            productId: selectedProduct,
+            centerId: selectedCenter,
+            groupId: selectedGroup,
+            status: selectedStatus,
+            granularity: daysDiff <= 60 ? 'day' : 'month',
+        };
+    }, [dateRange, selectedBranch, selectedOfficer, selectedProduct, selectedCenter, selectedGroup, selectedStatus]);
+
+    const fetchMetrics = useCallback(async () => {
+        if (!user || profileLoading || !metricsParams) return;
+        setMetricsLoading(true);
+        try {
+            const data = await fetchReportsMetrics(supabase, metricsParams);
+            setMetrics(data);
+        } catch (error) {
+            toast({ title: 'Error loading report metrics', description: error.message, variant: 'destructive' });
+            setMetrics(null);
+        } finally {
+            setMetricsLoading(false);
+        }
+    }, [user, profileLoading, metricsParams, toast]);
 
     useEffect(() => {
-        fetchData();
-    }, [fetchData]);
+        fetchFilterMeta();
+    }, [fetchFilterMeta]);
+
+    useEffect(() => {
+        if (!loading) {
+            fetchMetrics();
+        }
+    }, [fetchMetrics, loading]);
 
     const handleDateFilterChange = (value) => {
         setActiveDateFilter(value);
@@ -227,18 +198,18 @@ const Reports = () => {
     };
 
     const availableFilters = useMemo(() => {
-        let officers = allData.users.filter(u => u.role === 'officer');
-        let centers = allData.centers;
-        let groups = allData.groups;
+        let officers = filterMeta.users.filter(u => u.role === 'officer');
+        let centers = filterMeta.centers;
+        let groups = filterMeta.groups;
 
-        const role = user?.user_metadata.role;
+        const role = effectiveRole;
 
         if (role === 'manager') {
-            officers = officers.filter(o => o.branch_id === user.user_metadata.branch_id);
-            centers = centers.filter(c => c.branch_id === user.user_metadata.branch_id);
+            officers = officers.filter((o) => o.branch_id === managerBranchScope);
+            centers = centers.filter((c) => c.branch_id === managerBranchScope);
         } else if (role === 'officer') {
             officers = [];
-            centers = centers.filter(c => c.loan_officer_id === user.id);
+            centers = centers.filter((c) => c.loan_officer_id === user.id);
         }
 
         if (selectedBranch !== 'all' && role === 'admin') {
@@ -247,12 +218,12 @@ const Reports = () => {
         }
         
         const centerIdsInScope = centers.map(c => c.id);
-        groups = allData.groups.filter(g => centerIdsInScope.includes(g.center_id));
+        groups = filterMeta.groups.filter(g => centerIdsInScope.includes(g.center_id));
         
         if (selectedOfficer !== 'all') {
             centers = centers.filter(c => c.loan_officer_id === selectedOfficer);
-            groups = allData.groups.filter(g => {
-                const center = allData.centers.find(c => c.id === g.center_id);
+            groups = filterMeta.groups.filter(g => {
+                const center = filterMeta.centers.find(c => c.id === g.center_id);
                 return center && center.loan_officer_id === selectedOfficer;
             });
         }
@@ -261,295 +232,47 @@ const Reports = () => {
         }
 
         return { officers, centers, groups };
-    }, [allData, user, selectedBranch, selectedOfficer, selectedCenter]);
+    }, [filterMeta, user, selectedBranch, selectedOfficer, selectedCenter, effectiveRole, managerBranchScope]);
 
-    const groupsInSelectedCenterFilter = useMemo(() => {
-        if (selectedCenter === 'all') return [];
-        return availableFilters.groups.filter((g) => g.center_id === selectedCenter);
-    }, [availableFilters.groups, selectedCenter]);
+    const reportBranchOptions = useMemo(
+        () => filterMeta.branches.map((b) => ({ value: b.id, label: b.name })),
+        [filterMeta.branches]
+    );
+    const reportOfficerOptions = useMemo(
+        () => availableFilters.officers.map((o) => ({ value: o.id, label: o.full_name })),
+        [availableFilters.officers]
+    );
+    const reportProductOptions = useMemo(
+        () => filterMeta.loanProducts.map((p) => ({ value: p.id, label: p.name })),
+        [filterMeta.loanProducts]
+    );
+    const reportCenterOptions = useMemo(
+        () => availableFilters.centers.map((c) => ({ value: c.id, label: c.name })),
+        [availableFilters.centers]
+    );
+    const reportGroupOptions = useMemo(
+        () => availableFilters.groups.map((g) => ({ value: g.id, label: g.name })),
+        [availableFilters.groups]
+    );
 
-    const groupsForTableFilter = useMemo(() => {
-        if (selectedCenter === 'all') return availableFilters.groups;
-        return availableFilters.groups.filter((g) => g.center_id === selectedCenter);
-    }, [availableFilters.groups, selectedCenter]);
+    const reportStats = metrics?.summary ?? {
+        totalPortfolio: 0,
+        principalDisbursed: 0,
+        repaymentsCollected: 0,
+        prepaymentsCollected: 0,
+        activeLoans: 0,
+        totalBorrowers: 0,
+        par: 0,
+    };
 
-    useEffect(() => {
-        if (selectedCenter === 'all') {
-            setSelectedGroup('all');
-        }
-    }, [selectedCenter]);
+    const chartData = {
+        barChartData: metrics?.barChartData ?? [],
+        statusDistribution: metrics?.statusDistribution ?? [],
+        productPortfolio: metrics?.productPortfolio ?? [],
+    };
 
-    useEffect(() => {
-        if (selectedGroup !== 'all' && !groupsForTableFilter.some((g) => g.id === selectedGroup)) {
-            setSelectedGroup('all');
-        }
-    }, [selectedCenter, selectedGroup, groupsForTableFilter]);
-
-    const filteredData = useMemo(() => {
-        const role = user?.user_metadata.role;
-        const q = searchQuery.trim().toLowerCase();
-        const loanMatchesSearch = (l) => {
-            if (!q) return true;
-            const b = l?.borrowers;
-            return (
-                (l?.loan_id && l.loan_id.toLowerCase().includes(q)) ||
-                `${b?.first_name || ''} ${b?.surname || ''}`.toLowerCase().includes(q) ||
-                (b?.borrower_id && String(b.borrower_id).toLowerCase().includes(q)) ||
-                (b?.phone_number && String(b.phone_number).toLowerCase().includes(q)) ||
-                (l?.principal != null && String(l.principal).includes(q)) ||
-                (l?.balance != null && String(l.balance).includes(q))
-            );
-        };
-
-        // --- 1. FILTER LOANS (Portfolio / Stock Metrics) ---
-        let loans = allData.loans;
-
-        if (role === 'manager') {
-            loans = loans.filter(l => l.borrowers.branch_id === user.user_metadata.branch_id);
-        } else if (role === 'officer') {
-            loans = loans.filter(l => l.officer_id === user.id);
-        }
-
-        if (selectedBranch !== 'all') loans = loans.filter(l => l.borrowers.branch_id === selectedBranch);
-        if (selectedOfficer !== 'all') loans = loans.filter(l => l.officer_id === selectedOfficer);
-        if (selectedGroup !== 'all') loans = loans.filter(l => l.borrowers.group_id === selectedGroup);
-        else if (selectedCenter !== 'all') {
-            const groupIdsInCenter = availableFilters.groups.filter(g => g.center_id === selectedCenter).map(g => g.id);
-            loans = loans.filter(l => groupIdsInCenter.includes(l.borrowers.group_id));
-        }
-
-        if (selectedProduct !== 'all') loans = loans.filter(l => l.product_id === selectedProduct);
-        if (selectedStatus !== 'all') loans = loans.filter(l => l.status === selectedStatus);
-        if (q) {
-            loans = loans.filter((l) => loanMatchesSearch(l));
-        }
-
-        // Date Filter for Disbursements
-        const loansDisbursedInPeriod = loans.filter(l => {
-            if (!l.disbursement_date) return false;
-            const [y, m, d] = l.disbursement_date.split('-').map(Number);
-            const disbursementDate = new Date(y, m - 1, d);
-            const from = dateRange.from ? startOfDay(dateRange.from) : null;
-            const to = dateRange.to ? endOfDay(dateRange.to) : (dateRange.from ? endOfDay(dateRange.from) : null);
-            return (!from || disbursementDate >= from) && (!to || disbursementDate <= to);
-        });
-        
-        // --- 2. FILTER REPAYMENTS (Cash Flow Metrics) ---
-        // EXACT LOGIC FROM RepaymentManagement.jsx applied here
-        
-        // 2a. Initial Set based on Role (Mimics how Repayment pages fetch)
-        let repayments = allData.repayments;
-
-        if (role === 'officer') {
-            repayments = repayments.filter(r => r.officer_id === user.id);
-        } else if (role === 'manager') {
-             // Managers see repayments where the collecting officer is in their branch
-             repayments = repayments.filter(r => {
-                 const officer = allData.users.find(u => u.id === r.officer_id);
-                 return officer && officer.branch_id === user.user_metadata.branch_id;
-             });
-        }
-        // Admins see all by default (already loaded)
-
-        // 2b. Apply UI Filters (Branch, Officer, Group/Center)
-        // Note: Repayment Management filters by Branch/Officer directly. 
-        // It often filters by Group via the Loan association.
-
-        if (selectedBranch !== 'all') {
-             repayments = repayments.filter(r => {
-                 const officer = allData.users.find(u => u.id === r.officer_id);
-                 return officer && officer.branch_id === selectedBranch;
-             });
-        }
-        
-        if (selectedOfficer !== 'all') {
-            repayments = repayments.filter(r => r.officer_id === selectedOfficer);
-        }
-
-        // Apply Group/Center/Product filters via the associated loan
-        const hasLoanScopeFilters = selectedProduct !== 'all' || selectedGroup !== 'all' || selectedCenter !== 'all' || selectedStatus !== 'all';
-        
-        if (hasLoanScopeFilters) {
-             // We need to verify if the repayment's loan matches these criteria
-             // We look up the loan in allData.loans (not the filtered `loans` variable above, to avoid circular logic or over-filtering)
-             // However, for consistency, if a user filters by "Product A", they expect Repayments for "Product A".
-             
-             repayments = repayments.filter(r => {
-                 // The repayment object from Supabase join includes `loans` which has `borrowers`
-                 // But our allData.repayments join structure might be slightly different depending on the fetch.
-                 // fetchData uses REPAYMENTS_FOR_REPORT_SELECT (no loan schedule JSON) and date-bounded rows.
-                 
-                 // If the deep join data is missing, we fallback to finding it in allData.loans
-                 let loan = r.loans;
-                 if (!loan || !loan.borrowers) {
-                     loan = allData.loans.find(l => l.id === r.loan_id);
-                 }
-                 
-                 if (!loan) return false; // Should not happen if referential integrity holds
-
-                 if (selectedProduct !== 'all' && loan.product_id !== selectedProduct) return false;
-                 if (selectedStatus !== 'all' && loan.status !== selectedStatus) return false;
-                 
-                 const borrower = loan.borrowers;
-                 if (selectedGroup !== 'all') {
-                     if (borrower.group_id !== selectedGroup) return false;
-                 } else if (selectedCenter !== 'all') {
-                     // Check if group is in center
-                     const group = allData.groups.find(g => g.id === borrower.group_id);
-                     if (!group || group.center_id !== selectedCenter) return false;
-                 }
-                 
-                 return true;
-             });
-        }
-
-        if (q) {
-            repayments = repayments.filter((r) => {
-                let loan = r.loans;
-                if (!loan || !loan.borrowers) {
-                    loan = allData.loans.find((l) => l.id === r.loan_id);
-                }
-                if (!loan) return false;
-                return loanMatchesSearch(loan);
-            });
-        }
-
-        // 2c. Date Filter - EXACT LOGIC from RepaymentManagement.jsx
-        // Logic:
-        // const dateMatch = !dateRangeFilter?.from || (
-        //     new Date(r.actual_payment_date) >= startOfDay(dateRangeFilter.from) &&
-        //     new Date(r.actual_payment_date) <= endOfDay(dateRangeFilter.to || dateRangeFilter.from)
-        // );
-
-        const dateFilteredRepayments = repayments.filter(r => {
-            if (!r.actual_payment_date) return false;
-            
-            // Standardize on JS Date object comparison used in RepaymentManagement
-            const rDate = new Date(r.actual_payment_date);
-            
-            const from = dateRange.from ? startOfDay(dateRange.from) : null;
-            const to = dateRange.to ? endOfDay(dateRange.to) : (dateRange.from ? endOfDay(dateRange.from) : null);
-            
-            return (!from || rDate >= from) && (!to || rDate <= to);
-        });
-
-        return { loans, borrowers: allData.borrowers, repayments: dateFilteredRepayments, loansDisbursedInPeriod };
-    }, [
-        allData,
-        user,
-        dateRange,
-        selectedBranch,
-        selectedOfficer,
-        selectedProduct,
-        selectedCenter,
-        selectedGroup,
-        selectedStatus,
-        availableFilters.groups,
-        searchQuery,
-    ]);
-
-    const reportStats = useMemo(() => {
-        const { loans, repayments, loansDisbursedInPeriod } = filteredData;
-        const totalPortfolio = loans.reduce((sum, l) => sum + (l.balance || 0), 0);
-        const principalDisbursed = loansDisbursedInPeriod.reduce((sum, l) => sum + (l.principal || 0), 0);
-        
-        // Use EXACT same summation as Repayment Management page
-        // const totalPaid = filteredRepayments.reduce((sum, r) => sum + r.amount, 0);
-        const repaymentsCollected = repayments.reduce((sum, r) => sum + (r.amount || 0), 0);
-        
-        const interestCollected = repayments.reduce((sum, r) => sum + (r.interest_paid || 0), 0); 
-        const activeLoans = loans.filter(l => ['active', 'delinquent'].includes(l.status)).length;
-        const totalBorrowers = new Set(loans.map(l => l.borrower_id)).size;
-
-        const portfolioAtRisk = loans.filter(l => ['delinquent', 'defaulted'].includes(l.status)).reduce((sum, l) => sum + (l.balance || 0), 0);
-        const par = totalPortfolio > 0 ? (portfolioAtRisk / totalPortfolio) * 100 : 0;
-
-        return { totalPortfolio, principalDisbursed, repaymentsCollected, interestCollected, activeLoans, totalBorrowers, par };
-    }, [filteredData]);
-
-     const chartData = useMemo(() => {
-        const { loans, loansDisbursedInPeriod, repayments } = filteredData;
-        const from = dateRange.from || startOfMonth(new Date());
-        const to = dateRange.to || (dateRange.from ? endOfDay(dateRange.from) : endOfMonth(new Date()));
-
-        // Determine if we should show daily or monthly bars based on range duration
-        const daysDiff = differenceInDays(to, from);
-        const isDailyView = daysDiff <= 60; // Cutoff for switching to monthly view
-
-        let barChartData = [];
-
-        if (isDailyView) {
-             barChartData = eachDayOfInterval({ start: from, end: to }).map(day => {
-                const dayLabel = formatDate(day, 'MMM dd');
-                const start = startOfDay(day);
-                const end = endOfDay(day);
-
-                 const disbursed = loansDisbursedInPeriod
-                    .filter(l => {
-                         if (!l.disbursement_date) return false;
-                         const [dy, dm, dd] = l.disbursement_date.split('-').map(Number);
-                         const disburseDate = new Date(dy, dm - 1, dd);
-                         return disburseDate >= start && disburseDate <= end;
-                    })
-                    .reduce((sum, l) => sum + l.principal, 0);
-
-                const collected = repayments
-                    .filter(r => {
-                        // Repayment Chart Logic - match Date Filter logic above
-                        if (!r.actual_payment_date) return false;
-                        const rDate = new Date(r.actual_payment_date);
-                        return rDate >= start && rDate <= end;
-                    })
-                    .reduce((sum, r) => sum + r.amount, 0);
-
-                return { name: dayLabel, Disbursed: disbursed, Collected: collected };
-            });
-        } else {
-            barChartData = eachMonthOfInterval({ start: from, end: to }).map(monthStart => {
-                const monthEnd = endOfMonth(monthStart);
-                const monthLabel = formatDate(monthStart, 'MMM yyyy');
-
-                const disbursed = loansDisbursedInPeriod
-                    .filter(l => {
-                         if (!l.disbursement_date) return false;
-                         const [dy, dm, dd] = l.disbursement_date.split('-').map(Number);
-                         const disburseDate = new Date(dy, dm - 1, dd);
-                         return disburseDate >= monthStart && disburseDate <= monthEnd;
-                    })
-                    .reduce((sum, l) => sum + l.principal, 0);
-
-                const collected = repayments
-                    .filter(r => {
-                         // Repayment Chart Logic - match Date Filter logic above
-                        if (!r.actual_payment_date) return false;
-                        const rDate = new Date(r.actual_payment_date);
-                        return rDate >= monthStart && rDate <= monthEnd;
-                    })
-                    .reduce((sum, r) => sum + r.amount, 0);
-
-                return { name: monthLabel, Disbursed: disbursed, Collected: collected };
-            });
-        }
-
-        const statusCounts = loans.reduce((acc, loan) => {
-            const status = loan.status || 'unknown';
-            acc[status] = (acc[status] || 0) + 1;
-            return acc;
-        }, {});
-        
-        const statusDistribution = Object.keys(statusCounts).map(status => ({
-            name: status.charAt(0).toUpperCase() + status.slice(1),
-            value: statusCounts[status]
-        }));
-
-        const productPortfolio = allData.loanProducts.map(product => {
-            const productLoans = loans.filter(l => l.product_id === product.id);
-            const portfolio = productLoans.reduce((sum, l) => sum + (l.balance || 0), 0);
-            return { name: product.name, Portfolio: portfolio };
-        }).filter(p => p.Portfolio > 0);
-
-        return { barChartData, statusDistribution, productPortfolio };
-    }, [filteredData, dateRange, allData.loanProducts]);
+    const branchPerformanceData = metrics?.branchPerformanceData ?? [];
+    const officerPerformanceData = metrics?.officerPerformanceData ?? [];
 
     const handleExport = (data, fileName) => {
         const worksheet = XLSX.utils.json_to_sheet(data);
@@ -558,48 +281,64 @@ const Reports = () => {
         XLSX.writeFile(workbook, `${fileName}.xlsx`);
     };
 
-    const branchPerformanceData = useMemo(() => {
-        if (user?.user_metadata.role !== 'admin') return [];
-        return allData.branches.map(branch => {
-            const branchLoans = allData.loans.filter(l => l.borrowers.branch_id === branch.id);
-            const portfolio = branchLoans.reduce((sum, l) => sum + (l.balance || 0), 0);
-            const parValue = branchLoans.filter(l => ['delinquent', 'defaulted'].includes(l.status)).reduce((sum, l) => sum + (l.balance || 0), 0);
-            return {
-                branch: branch.name,
-                portfolio,
-                par: portfolio > 0 ? (parValue / portfolio) * 100 : 0,
-                officers: allData.users.filter(u => u.role === 'officer' && u.branch_id === branch.id).length
-            };
-        });
-    }, [allData, user]);
-
-    const officerPerformanceData = useMemo(() => {
-        const role = user?.user_metadata.role;
-        if (role === 'officer') return [];
-        let officers = allData.users.filter(u => u.role === 'officer');
-        if (role === 'manager') {
-            officers = officers.filter(o => o.branch_id === user.user_metadata.branch_id);
-        }
-        return officers.map(officer => {
-            const officerLoans = allData.loans.filter(l => l.officer_id === officer.id);
-            const portfolio = officerLoans.reduce((sum, l) => sum + (l.balance || 0), 0);
-            const parValue = officerLoans.filter(l => ['delinquent', 'defaulted'].includes(l.status)).reduce((sum, l) => sum + (l.balance || 0), 0);
-            return {
-                officer: officer.full_name,
-                portfolio,
-                par: portfolio > 0 ? (parValue / portfolio) * 100 : 0,
-                loans: officerLoans.length
-            };
-        });
-    }, [allData, user]);
-
     const statsCardsData = [
-        { title: 'Total Portfolio', value: `${currency} ${reportStats.totalPortfolio.toLocaleString(undefined, { maximumFractionDigits: 0 })}`, icon: Briefcase, color: 'text-primary' },
-        { title: 'Principal Disbursed', value: `${currency} ${reportStats.principalDisbursed.toLocaleString(undefined, { maximumFractionDigits: 0 })}`, icon: TrendingUp, color: 'text-green-600' },
-        { title: 'Repayments Collected', value: `${currency} ${reportStats.repaymentsCollected.toLocaleString(undefined, { maximumFractionDigits: 0 })}`, icon: DollarSign, color: 'text-yellow-600' },
-        { title: 'Active Loans', value: reportStats.activeLoans, icon: Briefcase, color: 'text-indigo-600' },
-        { title: 'Borrowers', value: reportStats.totalBorrowers, icon: Users, color: 'text-pink-600' },
-        { title: 'Portfolio at Risk (PAR)', value: `${reportStats.par.toFixed(2)}%`, icon: AlertTriangle, color: 'text-red-600' },
+        {
+            title: 'Total Portfolio',
+            money: true,
+            amount: reportStats.totalPortfolio,
+            maxFractionDigits: 0,
+            subtitle: 'Current snapshot (filters apply; not limited by date range)',
+            icon: Briefcase,
+            color: 'text-blue-600',
+        },
+        {
+            title: 'Principal Disbursed',
+            money: true,
+            amount: reportStats.principalDisbursed,
+            maxFractionDigits: 0,
+            subtitle: 'In selected date range (disbursement date)',
+            icon: TrendingUp,
+            color: 'text-green-600',
+        },
+        {
+            title: 'Repayments Collected',
+            money: true,
+            amount: reportStats.repaymentsCollected,
+            maxFractionDigits: 0,
+            subtitle: 'In selected date range (actual payment date)',
+            icon: DollarSign,
+            color: 'text-yellow-600',
+        },
+        {
+            title: 'Prepayment (in range)',
+            money: true,
+            amount: reportStats.prepaymentsCollected,
+            maxFractionDigits: 0,
+            subtitle: 'In selected date range (actual payment date)',
+            icon: PiggyBank,
+            color: 'text-emerald-600',
+        },
+        {
+            title: 'Active Loans',
+            value: reportStats.activeLoans,
+            subtitle: 'Active, delinquent, or defaulted (current snapshot)',
+            icon: Briefcase,
+            color: 'text-indigo-600',
+        },
+        {
+            title: 'Borrowers',
+            value: reportStats.totalBorrowers,
+            subtitle: 'With loans in current filter scope',
+            icon: Users,
+            color: 'text-pink-600',
+        },
+        {
+            title: 'Portfolio at Risk (PAR)',
+            value: `${reportStats.par.toFixed(2)}%`,
+            subtitle: 'Current snapshot (delinquent + defaulted balance)',
+            icon: AlertTriangle,
+            color: 'text-red-600',
+        },
     ];
 
     const PIE_COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#AF19FF', '#8884d8'];
@@ -607,8 +346,18 @@ const Reports = () => {
     return (
         <DashboardLayout title="Reports">
             <div className="space-y-8">
-                {loading ? <div className="text-center py-10">Loading report data...</div> :
+                <p className="text-sm text-neutral-500">
+                    In-depth analysis of your operations. Metrics are computed on the server (same date rules as the dashboard).
+                    Repayments use <strong>actual payment date</strong> (when payment was recorded), not installment due dates.
+                    Portfolio, PAR, active loans, and status charts reflect the <strong>current loan book</strong> after filters;
+                    disbursements and repayments use the <strong>selected date range</strong> above.
+                </p>
+
+                {loading ? <div className="text-center py-10">Loading report filters…</div> :
                 <>
+                    {metricsLoading && (
+                        <p className="text-sm text-muted-foreground text-center">Updating metrics…</p>
+                    )}
                     <Card><CardContent className="p-4 space-y-4">
                         <div className="flex flex-wrap items-center gap-4">
                             <Tabs value={activeDateFilter} onValueChange={handleDateFilterChange} className="w-auto">
@@ -621,15 +370,9 @@ const Reports = () => {
                             </Tabs>
                             <Popover>
                                 <PopoverTrigger asChild>
-                                    <Button type="button" variant="outline" className={cn('w-full min-w-[16rem] justify-start text-left font-normal sm:w-[280px]', activeDateFilter === 'custom' && 'border-primary')}>
-                                        <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
-                                        <span className="truncate">
-                                            {dateRange?.from
-                                                ? (dateRange.to
-                                                      ? `${formatDate(dateRange.from, 'LLL dd, y')} – ${formatDate(dateRange.to, 'LLL dd, y')}`
-                                                      : formatDate(dateRange.from, 'LLL dd, y'))
-                                                : 'Pick a date range'}
-                                        </span>
+                                    <Button variant="outline" className={`w-[280px] justify-start text-left font-normal ${activeDateFilter === 'custom' ? 'border-primary' : ''}`}>
+                                        <CalendarIcon className="mr-2 h-4 w-4" />
+                                        {dateRange?.from ? (dateRange.to ? `${formatDate(dateRange.from, 'LLL dd, y')} - ${formatDate(dateRange.to, 'LLL dd, y')}` : formatDate(dateRange.from, 'LLL dd, y')) : (<span>Pick a date range</span>)}
                                     </Button>
                                 </PopoverTrigger>
                                 <PopoverContent className="w-auto p-0" align="start">
@@ -637,122 +380,112 @@ const Reports = () => {
                                 </PopoverContent>
                             </Popover>
                         </div>
-                        <div className="flex w-full flex-col gap-2 lg:flex-row lg:flex-wrap lg:items-end">
-                            <div className="min-w-0 flex-1 lg:min-w-[12rem]">
-                                <div className="relative">
-                                    <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
-                                    <Input
-                                        placeholder="Search loan ID, name, phone, amount…"
-                                        value={searchQuery}
-                                        onChange={(e) => setSearchQuery(e.target.value)}
-                                        className="w-full pl-8"
-                                    />
-                                </div>
-                            </div>
-                            {user?.user_metadata.role === 'admin' && (
-                                <Select value={selectedBranch} onValueChange={setSelectedBranch}>
-                                    <SelectTrigger className="w-full min-w-0 sm:min-w-[10rem] lg:w-[12rem]">
-                                        <SelectValue placeholder="Branch" />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        <SelectItem value="all">All branches</SelectItem>
-                                        {allData.branches.map((b) => (
-                                            <SelectItem key={b.id} value={b.id}>
-                                                {b.name}
-                                            </SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
+                            {effectiveRole === 'admin' && (
+                                <SearchableSelect
+                                    value={selectedBranch}
+                                    onValueChange={setSelectedBranch}
+                                    options={reportBranchOptions}
+                                    allLabel="All branches"
+                                    allValue="all"
+                                    placeholder="Select branch"
+                                    searchPlaceholder="Search branches…"
+                                    emptyText="No branch found."
+                                    triggerClassName="w-full"
+                                />
                             )}
-                            {(user?.user_metadata.role === 'admin' || user?.user_metadata.role === 'manager') && (
-                                <Select value={selectedOfficer} onValueChange={setSelectedOfficer}>
-                                    <SelectTrigger className="w-full min-w-0 sm:min-w-[10rem] lg:w-[12rem]">
-                                        <SelectValue placeholder="Officer" />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        <SelectItem value="all">All officers</SelectItem>
-                                        {availableFilters.officers.map((o) => (
-                                            <SelectItem key={o.id} value={o.id}>
-                                                {o.full_name}
-                                            </SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
+                            {(effectiveRole === 'admin' || effectiveRole === 'manager') && (
+                                <SearchableSelect
+                                    value={selectedOfficer}
+                                    onValueChange={setSelectedOfficer}
+                                    options={reportOfficerOptions}
+                                    allLabel="All officers"
+                                    allValue="all"
+                                    placeholder="Select officer"
+                                    searchPlaceholder="Search officers…"
+                                    emptyText="No officer found."
+                                    triggerClassName="w-full"
+                                />
                             )}
-                            <Select value={selectedCenter} onValueChange={setSelectedCenter}>
-                                <SelectTrigger className="w-full min-w-0 sm:min-w-[10rem] lg:w-[12rem]">
-                                    <SelectValue placeholder="Centre" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="all">All centres</SelectItem>
-                                    {availableFilters.centers.map((c) => (
-                                        <SelectItem key={c.id} value={c.id}>
-                                            {c.name}
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                            <Select
+                            <SearchableSelect
+                                value={selectedProduct}
+                                onValueChange={setSelectedProduct}
+                                options={reportProductOptions}
+                                allLabel="All products"
+                                allValue="all"
+                                placeholder="Select product"
+                                searchPlaceholder="Search products…"
+                                emptyText="No product found."
+                                triggerClassName="w-full"
+                            />
+                            <SearchableSelect
+                                value={selectedCenter}
+                                onValueChange={setSelectedCenter}
+                                options={reportCenterOptions}
+                                allLabel="All centers"
+                                allValue="all"
+                                placeholder="Select center"
+                                searchPlaceholder="Search centers…"
+                                emptyText="No center found."
+                                triggerClassName="w-full"
+                            />
+                            <SearchableSelect
                                 value={selectedGroup}
                                 onValueChange={setSelectedGroup}
-                                disabled={selectedCenter === 'all'}
-                            >
-                                <SelectTrigger
-                                    className="w-full min-w-0 sm:min-w-[10rem] lg:w-[12rem] disabled:cursor-not-allowed disabled:opacity-60"
-                                    title={selectedCenter === 'all' ? 'Select a centre first to filter by group' : undefined}
-                                >
-                                    <SelectValue
-                                        placeholder={selectedCenter === 'all' ? 'Select centre first' : 'Group'}
-                                    />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="all">All groups</SelectItem>
-                                    {groupsInSelectedCenterFilter.map((g) => (
-                                        <SelectItem key={g.id} value={g.id}>
-                                            {g.name}
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                            <Select value={selectedProduct} onValueChange={setSelectedProduct}>
-                                <SelectTrigger className="w-full min-w-0 sm:min-w-[10rem] lg:w-[12rem]">
-                                    <SelectValue placeholder="Product" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="all">All products</SelectItem>
-                                    {allData.loanProducts.map((p) => (
-                                        <SelectItem key={p.id} value={p.id}>
-                                            {p.name}
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                            <Select value={selectedStatus} onValueChange={setSelectedStatus}>
-                                <SelectTrigger className="w-full min-w-0 sm:min-w-[10rem] lg:w-[12rem]">
-                                    <SelectValue placeholder="Loan status" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="all">All statuses</SelectItem>
-                                    <SelectItem value="pending">Pending</SelectItem>
-                                    <SelectItem value="active">Active</SelectItem>
-                                    <SelectItem value="delinquent">Delinquent</SelectItem>
-                                    <SelectItem value="defaulted">Defaulted</SelectItem>
-                                    <SelectItem value="paid">Paid</SelectItem>
-                                    <SelectItem value="rejected">Rejected</SelectItem>
-                                    <SelectItem value="edit_requested">Edit requested</SelectItem>
-                                    <SelectItem value="delete_requested">Delete requested</SelectItem>
-                                </SelectContent>
-                            </Select>
+                                options={reportGroupOptions}
+                                allLabel="All groups"
+                                allValue="all"
+                                placeholder="Select group"
+                                searchPlaceholder="Search groups…"
+                                emptyText="No group found."
+                                triggerClassName="w-full"
+                            />
+                            <SearchableSelect
+                                value={selectedStatus}
+                                onValueChange={setSelectedStatus}
+                                options={LOAN_STATUS_FILTER_OPTIONS}
+                                allLabel="All statuses"
+                                allValue="all"
+                                placeholder="Loan status"
+                                searchPlaceholder="Search status…"
+                                emptyText="No status found."
+                                triggerClassName="w-full"
+                            />
                         </div>
                     </CardContent></Card>
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-6">
-                        {statsCardsData.map(stat => <StatCard key={stat.title} {...stat} />)}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-7 gap-6 [&>*]:min-w-0">
+                        {statsCardsData.map((stat) => (
+                            <KpiStatCard
+                                key={stat.title}
+                                title={stat.title}
+                                subtitle={stat.subtitle}
+                                icon={stat.icon}
+                                iconClassName={stat.color}
+                            >
+                                {stat.money ? (
+                                    <KpiMoneyValue
+                                        currency={currency}
+                                        amount={stat.amount}
+                                        minimumFractionDigits={0}
+                                        maximumFractionDigits={stat.maxFractionDigits ?? 0}
+                                    />
+                                ) : (
+                                    <KpiValue>{stat.value}</KpiValue>
+                                )}
+                            </KpiStatCard>
+                        ))}
                     </div>
 
                     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                         <Card className="lg:col-span-2">
-                            <CardHeader><CardTitle>Disbursed vs. Repayments</CardTitle></CardHeader>
+                            <CardHeader>
+                                <CardTitle>Disbursed vs. scheduled repayment vs. prepayment</CardTitle>
+                                <p className="text-xs text-muted-foreground mt-1">
+                                    Scheduled repayment and prepayment split uses stored repayment rows when prepayment
+                                    columns are set on each payment.
+                                </p>
+                            </CardHeader>
                             <CardContent>
                                 <ResponsiveContainer width="100%" height={300}>
                                     <BarChart data={chartData.barChartData}>
@@ -762,7 +495,8 @@ const Reports = () => {
                                         <Tooltip formatter={(value) => `${currency} ${value.toLocaleString()}`} />
                                         <Legend />
                                         <Bar dataKey="Disbursed" fill="#8884d8" />
-                                        <Bar dataKey="Collected" fill="#82ca9d" />
+                                        <Bar dataKey="Scheduled" fill="#82ca9d" />
+                                        <Bar dataKey="Prepayment" fill="#34d399" />
                                     </BarChart>
                                 </ResponsiveContainer>
                             </CardContent>
@@ -770,6 +504,7 @@ const Reports = () => {
                         <Card>
                             <CardHeader><CardTitle>Loan Status Distribution</CardTitle></CardHeader>
                             <CardContent>
+                                <p className="text-xs text-muted-foreground mb-3">Current snapshot after filters (not limited by date range).</p>
                                 <ResponsiveContainer width="100%" height={300}>
                                     <PieChart>
                                         <Pie data={chartData.statusDistribution} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={100} label>
@@ -788,6 +523,7 @@ const Reports = () => {
                     <Card>
                         <CardHeader><CardTitle>Portfolio by Product</CardTitle></CardHeader>
                         <CardContent>
+                            <p className="text-xs text-muted-foreground mb-3">Current portfolio balance by product (filters apply; not limited by date range).</p>
                             <ResponsiveContainer width="100%" height={300}>
                                 <BarChart data={chartData.productPortfolio} layout="vertical">
                                     <CartesianGrid strokeDasharray="3 3" />
@@ -801,18 +537,30 @@ const Reports = () => {
                         </CardContent>
                     </Card>
 
-                    {user?.user_metadata.role === 'admin' && (
+                    {effectiveRole === 'admin' && (
                         <Card>
-                            <CardHeader className="flex flex-row justify-between items-center"><CardTitle>Branch Performance</CardTitle><Button variant="outline" size="sm" onClick={() => handleExport(branchPerformanceData, 'Branch_Performance')}><Printer className="mr-2 h-4 w-4" /> Export</Button></CardHeader>
+                            <CardHeader className="flex flex-row justify-between items-center">
+                                <div>
+                                    <CardTitle>Branch Performance</CardTitle>
+                                    <p className="text-xs text-muted-foreground mt-1">Portfolio and PAR use filtered loan book (current snapshot).</p>
+                                </div>
+                                <Button variant="outline" size="sm" onClick={() => handleExport(branchPerformanceData, 'Branch_Performance')}><Printer className="mr-2 h-4 w-4" /> Export</Button>
+                            </CardHeader>
                             <CardContent>
                                 <Table><TableHeader><TableRow><TableHead>Branch</TableHead><TableHead>Portfolio</TableHead><TableHead>PAR</TableHead><TableHead>Officers</TableHead></TableRow></TableHeader><TableBody>{branchPerformanceData.map(b => (<TableRow key={b.branch}><TableCell>{b.branch}</TableCell><TableCell>{currency} {b.portfolio.toLocaleString()}</TableCell><TableCell>{b.par.toFixed(2)}%</TableCell><TableCell>{b.officers}</TableCell></TableRow>))}</TableBody></Table>
                             </CardContent>
                         </Card>
                     )}
 
-                    {(user?.user_metadata.role === 'admin' || user?.user_metadata.role === 'manager') && (
+                    {(effectiveRole === 'admin' || effectiveRole === 'manager') && (
                         <Card>
-                            <CardHeader className="flex flex-row justify-between items-center"><CardTitle>Loan Officer Performance</CardTitle><Button variant="outline" size="sm" onClick={() => handleExport(officerPerformanceData, 'Officer_Performance')}><Printer className="mr-2 h-4 w-4" /> Export</Button></CardHeader>
+                            <CardHeader className="flex flex-row justify-between items-center">
+                                <div>
+                                    <CardTitle>Loan Officer Performance</CardTitle>
+                                    <p className="text-xs text-muted-foreground mt-1">Portfolio and PAR use filtered loan book (current snapshot).</p>
+                                </div>
+                                <Button variant="outline" size="sm" onClick={() => handleExport(officerPerformanceData, 'Officer_Performance')}><Printer className="mr-2 h-4 w-4" /> Export</Button>
+                            </CardHeader>
                             <CardContent>
                                 <Table><TableHeader><TableRow><TableHead>Officer</TableHead><TableHead>Portfolio</TableHead><TableHead>PAR</TableHead><TableHead>Active Loans</TableHead></TableRow></TableHeader><TableBody>{officerPerformanceData.map(o => (<TableRow key={o.officer}><TableCell>{o.officer}</TableCell><TableCell>{currency} {o.portfolio.toLocaleString()}</TableCell><TableCell>{o.par.toFixed(2)}%</TableCell><TableCell>{o.loans}</TableCell></TableRow>))}</TableBody></Table>
                             </CardContent>

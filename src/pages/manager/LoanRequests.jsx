@@ -19,6 +19,7 @@ import {
     excelTdClassName,
     excelThClassName,
 } from '@/lib/excelTable';
+import { getManagerBranchId } from '@/lib/managerBranch';
 import { DEFAULT_TABLE_PAGE_SIZE, getTotalPages, slicePage } from '@/lib/tablePagination';
 import { TablePaginationBar } from '@/components/table/TablePaginationBar';
 import { Input } from '@/components/ui/input';
@@ -38,12 +39,14 @@ const LoanRequests = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [typeFilter, setTypeFilter] = useState('all');
   const [currentPage, setCurrentPage] = useState(1);
-
-  const branchId = user?.user_metadata?.branch_id;
+  const [branchId, setBranchId] = useState(null);
 
   const fetchData = useCallback(async () => {
     if (!user) return;
     setLoading(true);
+
+    const resolvedBranchId = await getManagerBranchId(user);
+    setBranchId(resolvedBranchId);
 
     const { data: config } = await supabase.from('system_config').select('value').eq('key', 'currency').single();
     if (config) setCurrency(config.value);

@@ -7,6 +7,7 @@ RETURNS text
 LANGUAGE sql
 IMMUTABLE
 PARALLEL SAFE
+SET search_path = public
 AS $$
   SELECT nullif(
     regexp_replace(lower(trim(coalesce(p, ''))), '\s', '', 'g'),
@@ -19,6 +20,7 @@ RETURNS text
 LANGUAGE sql
 IMMUTABLE
 PARALLEL SAFE
+SET search_path = public
 AS $$
   SELECT nullif(lower(trim(coalesce(p, ''))), '');
 $$;

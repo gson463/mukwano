@@ -30,6 +30,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Badge } from '@/components/ui/badge';
 import { getDisabledDates } from '@/utils/holidayUtils';
 import { statCardIconWellClass } from '@/lib/utils';
+import { getManagerBranchId } from '@/lib/managerBranch';
 import {
     excelEmptyStateCellClassName,
     excelTableClassName,
@@ -97,7 +98,9 @@ const ManagerRepaymentManagement = () => {
     };
 
     const fetchContextData = useCallback(async () => {
-        if (!user || !user.user_metadata.branch_id) return;
+        if (!user) return;
+        const branchId = await getManagerBranchId(user);
+        if (!branchId) return;
         setLoading(true);
         try {
             const { data: config } = await supabase.from('system_config').select('value').eq('key', 'currency').single();
@@ -106,7 +109,7 @@ const ManagerRepaymentManagement = () => {
             const { data: officersData, error: officersError } = await supabase
                 .from('users')
                 .select('id, full_name')
-                .eq('branch_id', user.user_metadata.branch_id)
+                .eq('branch_id', branchId)
                 .eq('role', 'officer');
             if (officersError) throw officersError;
             setBranchOfficers(officersData || []);
@@ -116,7 +119,7 @@ const ManagerRepaymentManagement = () => {
             const { data: centersData, error: centersError } = await supabase
                 .from('centers')
                 .select('id, name, branch_id, loan_officer_id')
-                .eq('branch_id', user.user_metadata.branch_id)
+                .eq('branch_id', branchId)
                 .order('name');
             if (centersError) throw centersError;
             setCenters(centersData || []);
@@ -146,7 +149,9 @@ const ManagerRepaymentManagement = () => {
     }, [user, toast]);
 
     const fetchRepayments = useCallback(async () => {
-        if (!user || !user.user_metadata.branch_id) return;
+        if (!user) return;
+        const branchId = await getManagerBranchId(user);
+        if (!branchId) return;
         const officerIds = branchOfficers.map((o) => o.id);
         setRepaymentsLoading(true);
         try {

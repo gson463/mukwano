@@ -1,5 +1,6 @@
 import { format, parseISO, startOfDay, endOfDay, isSameDay, startOfMonth, endOfMonth } from 'date-fns';
 import { toZonedTime } from 'date-fns-tz';
+import { getManagerBranchId } from '@/lib/managerBranch';
 
 const EAT = 'Africa/Nairobi';
 
@@ -70,7 +71,10 @@ export async function loadMetricData({
     timeZone: EAT,
   });
 
-  const branchId = user.user_metadata?.branch_id ?? null;
+  const branchId =
+    role === 'manager'
+      ? (await getManagerBranchId(user))
+      : (user.user_metadata?.branch_id ?? null);
   const userId = user.id;
 
   let officerIds = [userId];

@@ -74,11 +74,18 @@ const CenterGroupManagement = () => {
             return;
         }
 
+        const { data: profileRow } = await supabase.from('users').select('branch_id').eq('id', user.id).maybeSingle();
+        const branchId = profileRow?.branch_id ?? user.user_metadata?.branch_id ?? null;
+        if (!editingCenter && !branchId) {
+            toast({ title: 'Error', description: 'Your branch is not set. Contact an administrator.', variant: 'destructive' });
+            return;
+        }
+
         let result;
         if (editingCenter) {
             result = await supabase.from('centers').update({ ...centerFormData }).eq('id', editingCenter.id);
         } else {
-            result = await supabase.from('centers').insert({ ...centerFormData, loan_officer_id: user.id, branch_id: user.user_metadata.branch_id });
+            result = await supabase.from('centers').insert({ ...centerFormData, loan_officer_id: user.id, branch_id: branchId });
         }
         
         if (result.error) {

@@ -14,7 +14,7 @@ import { Loader2, TrendingDown, Scale, Trash2, Search, ChevronLeft, ChevronRight
 import { format, differenceInDays } from 'date-fns';
 import { toZonedTime, format as formatTZ } from 'date-fns-tz';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
-import { useDate } from '@/contexts/DateContext';
+import { getManagerBranchId } from '@/lib/managerBranch';
 
 const EAT_TIMEZONE = 'Africa/Nairobi';
 const DEFAULTERS_PAGE_SIZE = 10;
@@ -78,7 +78,10 @@ const DefaultersManagement = () => {
 
             const role = user.user_metadata.role;
             const { data: profileRow } = await supabase.from('users').select('branch_id').eq('id', user.id).maybeSingle();
-            const branchId = profileRow?.branch_id ?? null;
+            const branchId =
+                role === 'manager'
+                    ? (profileRow?.branch_id ?? (await getManagerBranchId(user)))
+                    : (profileRow?.branch_id ?? null);
 
             let centersQuery = supabase
                 .from('centers')
@@ -89,8 +92,8 @@ const DefaultersManagement = () => {
                 if (branchId) {
                     centersQuery = centersQuery.eq('branch_id', branchId);
                 }
-            } else if (role === 'manager') {
-                centersQuery = centersQuery.eq('branch_id', user.user_metadata.branch_id);
+            } else if (role === 'manager' && branchId) {
+                centersQuery = centersQuery.eq('branch_id', branchId);
             }
 
             const { data: centersData, error: centersError } = await centersQuery;
@@ -131,11 +134,11 @@ const DefaultersManagement = () => {
 
             if (user.user_metadata.role === 'officer') {
                 query = query.eq('officer_id', user.id);
-            } else if (user.user_metadata.role === 'manager') {
+            } else if (user.user_metadata.role === 'manager' && branchId) {
                 const { data: officers, error: officersError } = await supabase
                     .from('users')
                     .select('id')
-                    .eq('branch_id', user.user_metadata.branch_id);
+                    .eq('branch_id', branchId);
                 if (officersError) throw officersError;
                 query = query.in('officer_id', officers.map((o) => o.id));
             }

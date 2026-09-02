@@ -14,7 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Loader2, Coins, Search, ChevronLeft, ChevronRight } from 'lucide-react';
 import DashboardLayout from '@/components/layout/DashboardLayout';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
-import { useDate } from '@/contexts/DateContext';
+import { getManagerBranchId } from '@/lib/managerBranch';
 
 const EAT_TIMEZONE = 'Africa/Nairobi';
 const ARREARS_PAGE_SIZE = 10;
@@ -70,7 +70,10 @@ const ArrearsManagement = () => {
 
         const role = user.user_metadata.role;
         const { data: profileRow } = await supabase.from('users').select('branch_id').eq('id', user.id).maybeSingle();
-        const branchId = profileRow?.branch_id ?? null;
+        const branchId =
+            role === 'manager'
+                ? (profileRow?.branch_id ?? (await getManagerBranchId(user)))
+                : (profileRow?.branch_id ?? null);
 
         let centersQuery = supabase
             .from('centers')
@@ -81,8 +84,8 @@ const ArrearsManagement = () => {
             if (branchId) {
                 centersQuery = centersQuery.eq('branch_id', branchId);
             }
-        } else if (role === 'manager') {
-            centersQuery = centersQuery.eq('branch_id', user.user_metadata.branch_id);
+        } else if (role === 'manager' && branchId) {
+            centersQuery = centersQuery.eq('branch_id', branchId);
         }
 
         const { data: centersData, error: centersError } = await centersQuery;
@@ -137,11 +140,11 @@ const ArrearsManagement = () => {
         // Role-Based Filtering
         if (user.user_metadata.role === 'officer') {
             query = query.eq('officer_id', user.id);
-        } else if (user.user_metadata.role === 'manager') {
+        } else if (user.user_metadata.role === 'manager' && branchId) {
             const { data: officers, error: officersError } = await supabase
                 .from('users')
                 .select('id')
-                .eq('branch_id', user.user_metadata.branch_id);
+                .eq('branch_id', branchId);
 
             if (officersError) {
                 toast({ title: 'Error fetching loan officers', description: officersError.message, variant: 'destructive' });

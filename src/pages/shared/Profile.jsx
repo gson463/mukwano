@@ -31,11 +31,13 @@ const Profile = () => {
       photoUrl: user.user_metadata.photoUrl || ''
     });
 
-    if (user.user_metadata.branch_id) {
+    const { data: profileRow } = await supabase.from('users').select('branch_id').eq('id', user.id).maybeSingle();
+    const branchId = profileRow?.branch_id ?? user.user_metadata.branch_id ?? null;
+    if (branchId) {
         const { data: branchData, error } = await supabase
             .from('branches')
             .select('name')
-            .eq('id', user.user_metadata.branch_id)
+            .eq('id', branchId)
             .single();
         if (error) {
             console.error('Error fetching branch name:', error);
