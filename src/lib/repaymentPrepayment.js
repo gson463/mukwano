@@ -32,3 +32,23 @@ export function scheduledRepaymentAmount(repayment) {
 	const amt = Number(repayment?.amount ?? 0);
 	return Math.max(0, amt - prepaymentAmount(repayment));
 }
+
+/** Prefer stored server columns when present (history table / exports). */
+export function storedPrepaymentAmount(repayment) {
+	if (!repayment) return 0;
+	const amt = Number(repayment.amount ?? 0);
+	const prep = Number(repayment.prepayment_amount ?? 0);
+	if (
+		String(repayment.wallet_split_source ?? '').trim() !== '' ||
+		(repayment.scheduled_due_snapshot != null && repayment.scheduled_due_snapshot !== '') ||
+		(Number.isFinite(prep) && prep > 0)
+	) {
+		return Math.min(Math.max(0, prep), amt);
+	}
+	return prepaymentAmount(repayment);
+}
+
+export function storedScheduledRepaymentAmount(repayment) {
+	const amt = Number(repayment?.amount ?? 0);
+	return Math.max(0, amt - storedPrepaymentAmount(repayment));
+}

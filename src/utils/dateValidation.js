@@ -1,7 +1,19 @@
-import { startOfToday, isBefore, parseISO } from 'date-fns';
+import { startOfToday, isBefore, parse, parseISO, format } from 'date-fns';
 import { format as formatTZ } from 'date-fns-tz';
 
 const EAT_TIMEZONE = 'Africa/Nairobi';
+
+/**
+ * Format a repayment business date (YYYY-MM-DD from DB) for display.
+ * Parses as calendar date — avoids UTC shift from parseISO on date-only strings.
+ */
+export function formatRepaymentBusinessDate(ymd, pattern = 'MMM dd, yyyy') {
+  if (ymd == null || ymd === '') return '—';
+  const s = String(ymd).slice(0, 10);
+  const d = parse(s, 'yyyy-MM-dd', new Date());
+  if (Number.isNaN(d.getTime())) return s;
+  return format(d, pattern);
+}
 
 /**
  * Returns today's date as a string in YYYY-MM-DD format based on EAT timezone.

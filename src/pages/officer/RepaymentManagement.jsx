@@ -19,7 +19,7 @@ import { Trash2, Calendar as CalendarIcon, FileDown, Eye, Loader2, ArrowRightLef
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Calendar } from '@/components/ui/calendar';
 import * as XLSX from 'xlsx';
-import { getTodayDateString } from '@/utils/dateValidation';
+import { getTodayDateString, formatRepaymentBusinessDate } from '@/utils/dateValidation';
 import { getDisabledDates, isNonWorkingDay } from '@/utils/holidayUtils';
 import { statCardIconWellClass } from '@/lib/utils';
 import {
@@ -32,7 +32,7 @@ import {
     normalizeWalletPrepaymentSplitMode,
     scheduledDueRpcName,
 } from '@/lib/walletPrepaymentSplitMode.js';
-import { prepaymentAmount, scheduledRepaymentAmount } from '@/lib/repaymentPrepayment.js';
+import { storedPrepaymentAmount, storedScheduledRepaymentAmount } from '@/lib/repaymentPrepayment.js';
 
 const EAT_TIMEZONE = 'Africa/Nairobi';
 const REPAYMENT_PAGE_SIZE = 10;
@@ -607,7 +607,7 @@ const RepaymentManagement = () => {
         }));
 
         const repaymentsForLoan = repayments.filter(r => r.loan_id === loan.id).map(r => ({
-            'Payment Date': formatTZ(toZonedTime(new Date(r.actual_payment_date), EAT_TIMEZONE), 'yyyy-MM-dd'),
+            'Payment Date': formatRepaymentBusinessDate(r.actual_payment_date, 'yyyy-MM-dd'),
             'Principal Paid': r.principal_paid,
             'Interest Paid': r.interest_paid,
             'Total Amount': r.amount,
@@ -1026,7 +1026,7 @@ const RepaymentManagement = () => {
                                             />
                                         </TableHead>
                                         <TableHead className="min-w-[6rem] border border-slate-300 bg-slate-100 px-2 py-2 text-xs font-semibold uppercase tracking-wide text-slate-800 dark:border-slate-600 dark:bg-slate-800/90 dark:text-slate-100">
-                                            Date
+                                            Payment date
                                         </TableHead>
                                         <TableHead className="min-w-[9rem] border border-slate-300 bg-slate-100 px-2 py-2 text-xs font-semibold uppercase tracking-wide text-slate-800 dark:border-slate-600 dark:bg-slate-800/90 dark:text-slate-100">
                                             Borrower
@@ -1077,7 +1077,7 @@ const RepaymentManagement = () => {
                                                     />
                                                 </TableCell>
                                                 <TableCell className="border border-slate-300 text-xs tabular-nums dark:border-slate-600">
-                                                    {format(parseISO(r.actual_payment_date), 'MMM dd, yyyy')}
+                                                    {formatRepaymentBusinessDate(r.actual_payment_date)}
                                                 </TableCell>
                                                 <TableCell className="border border-slate-300 dark:border-slate-600">
                                                     <div className="flex flex-col">
@@ -1114,13 +1114,13 @@ const RepaymentManagement = () => {
                                                 </TableCell>
                                                 <TableCell className="border border-slate-300 tabular-nums dark:border-slate-600">
                                                     {currency}{' '}
-                                                    {scheduledRepaymentAmount(r).toLocaleString(undefined, {
+                                                    {storedScheduledRepaymentAmount(r).toLocaleString(undefined, {
                                                         minimumFractionDigits: 2,
                                                     })}
                                                 </TableCell>
                                                 <TableCell className="border border-slate-300 tabular-nums dark:border-slate-600">
                                                     {currency}{' '}
-                                                    {prepaymentAmount(r).toLocaleString(undefined, {
+                                                    {storedPrepaymentAmount(r).toLocaleString(undefined, {
                                                         minimumFractionDigits: 2,
                                                     })}
                                                 </TableCell>
