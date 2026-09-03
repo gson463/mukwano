@@ -245,12 +245,14 @@ const GroupRepayment = () => {
 
         let successCount = 0;
         let errorCount = 0;
+        let prepaymentTotal = 0;
+        let prepaymentMembers = 0;
 
         const repaymentPromises = groupMembers.map(async (member) => {
             const amount = parseFloat(repaymentAmounts[member.borrowerId]);
             if (isNaN(amount) || amount <= 0) return;
 
-            const { error } = await supabase.functions.invoke('record-repayment', {
+            const { data, error } = await supabase.functions.invoke('record-repayment', {
                 body: {
                     loan_id: member.loanId,
                     amount: amount,
@@ -264,13 +266,23 @@ const GroupRepayment = () => {
                 errorCount++;
             } else {
                 successCount++;
+                const prepay = Number(data?.prepayment_amount ?? 0);
+                if (Number.isFinite(prepay) && prepay > 0) {
+                    prepaymentTotal += prepay;
+                    prepaymentMembers += 1;
+                }
             }
         });
 
         await Promise.all(repaymentPromises);
 
         if (successCount > 0) {
-            toast({ title: 'Success', description: `Recorded ${successCount} repayments for ${formatDate(parse(getTodayDateString(), 'yyyy-MM-dd', new Date()), 'PPP')}.` });
+            const dateLabel = formatDate(parse(getTodayDateString(), 'yyyy-MM-dd', new Date()), 'PPP');
+            let description = `Recorded ${successCount} repayments for ${dateLabel}.`;
+            if (prepaymentMembers > 0) {
+                description += ` Prepayment ${prepaymentTotal.toLocaleString()} (${prepaymentMembers} member${prepaymentMembers === 1 ? '' : 's'}) counted on today's report.`;
+            }
+            toast({ title: 'Success', description });
         }
         if (errorCount > 0) {
             toast({ title: 'Errors Occurred', description: `${errorCount} repayments failed to save.`, variant: 'destructive' });

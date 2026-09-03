@@ -10,7 +10,7 @@ import { useAuth } from '@/contexts/SupabaseAuthContext';
 import { useUserProfileScope, fetchOfficerIdsForBranch } from '@/hooks/useUserProfileScope';
 import { supabase } from '@/lib/customSupabaseClient';
 import { useToast } from '@/components/ui/use-toast';
-import { Calendar as CalendarIcon, Printer, Users, Briefcase, DollarSign, TrendingUp, AlertTriangle, PiggyBank } from 'lucide-react';
+import { Calendar as CalendarIcon, Printer, Users, Briefcase, DollarSign, TrendingUp, AlertTriangle, PiggyBank, CalendarCheck } from 'lucide-react';
 import { format as formatDate, startOfMonth, endOfMonth, startOfDay, endOfDay, startOfWeek, endOfWeek, startOfYear, endOfYear, differenceInDays } from 'date-fns';
 import * as XLSX from 'xlsx';
 import { BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
@@ -259,6 +259,7 @@ const Reports = () => {
         totalPortfolio: 0,
         principalDisbursed: 0,
         repaymentsCollected: 0,
+        scheduledRepaymentsCollected: 0,
         prepaymentsCollected: 0,
         activeLoans: 0,
         totalBorrowers: 0,
@@ -301,20 +302,29 @@ const Reports = () => {
             color: 'text-green-600',
         },
         {
-            title: 'Repayments Collected',
+            title: 'Repayments Collected (Total)',
             money: true,
             amount: reportStats.repaymentsCollected,
             maxFractionDigits: 0,
-            subtitle: 'In selected date range (actual payment date)',
+            subtitle: 'Counted on actual payment date (day cash was received)',
             icon: DollarSign,
             color: 'text-yellow-600',
+        },
+        {
+            title: 'Scheduled repayment (in range)',
+            money: true,
+            amount: reportStats.scheduledRepaymentsCollected,
+            maxFractionDigits: 0,
+            subtitle: 'Counted on actual payment date (day cash was received)',
+            icon: CalendarCheck,
+            color: 'text-lime-600',
         },
         {
             title: 'Prepayment (in range)',
             money: true,
             amount: reportStats.prepaymentsCollected,
             maxFractionDigits: 0,
-            subtitle: 'In selected date range (actual payment date)',
+            subtitle: 'Counted on actual payment date (day cash was received)',
             icon: PiggyBank,
             color: 'text-emerald-600',
         },
@@ -349,6 +359,7 @@ const Reports = () => {
                 <p className="text-sm text-neutral-500">
                     In-depth analysis of your operations. Metrics are computed on the server (same date rules as the dashboard).
                     Repayments use <strong>actual payment date</strong> (when payment was recorded), not installment due dates.
+                    Scheduled and prepayment amounts appear on the day cash was received — prepayment for future installments does not appear on those future dates.
                     Portfolio, PAR, active loans, and status charts reflect the <strong>current loan book</strong> after filters;
                     disbursements and repayments use the <strong>selected date range</strong> above.
                 </p>
@@ -454,7 +465,7 @@ const Reports = () => {
                         </div>
                     </CardContent></Card>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-7 gap-6 [&>*]:min-w-0">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-8 gap-6 [&>*]:min-w-0">
                         {statsCardsData.map((stat) => (
                             <KpiStatCard
                                 key={stat.title}
@@ -479,12 +490,21 @@ const Reports = () => {
 
                     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                         <Card className="lg:col-span-2">
-                            <CardHeader>
-                                <CardTitle>Disbursed vs. scheduled repayment vs. prepayment</CardTitle>
-                                <p className="text-xs text-muted-foreground mt-1">
-                                    Scheduled repayment and prepayment split uses stored repayment rows when prepayment
-                                    columns are set on each payment.
-                                </p>
+                            <CardHeader className="flex flex-row justify-between items-start gap-4">
+                                <div>
+                                    <CardTitle>Disbursed vs. scheduled repayment vs. prepayment</CardTitle>
+                                    <p className="text-xs text-muted-foreground mt-1">
+                                        Scheduled repayment and prepayment are counted on actual payment date (day cash was received).
+                                    </p>
+                                </div>
+                                <Button
+                                    variant="outline"
+                                    size="sm"
+                                    disabled={!chartData.barChartData.length}
+                                    onClick={() => handleExport(chartData.barChartData, 'Repayments_Time_Series')}
+                                >
+                                    <Printer className="mr-2 h-4 w-4" /> Export
+                                </Button>
                             </CardHeader>
                             <CardContent>
                                 <ResponsiveContainer width="100%" height={300}>
@@ -497,6 +517,7 @@ const Reports = () => {
                                         <Bar dataKey="Disbursed" fill="#8884d8" />
                                         <Bar dataKey="Scheduled" fill="#82ca9d" />
                                         <Bar dataKey="Prepayment" fill="#34d399" />
+                                        <Bar dataKey="Total" fill="#fbbf24" />
                                     </BarChart>
                                 </ResponsiveContainer>
                             </CardContent>

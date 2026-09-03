@@ -64,17 +64,23 @@ export async function fetchReportsMetrics(supabase, params) {
 			totalPortfolio: num(summary.total_portfolio),
 			principalDisbursed: num(summary.principal_disbursed),
 			repaymentsCollected: num(summary.repayments_collected),
+			scheduledRepaymentsCollected: num(summary.scheduled_repayments_collected),
 			prepaymentsCollected: num(summary.prepayments_collected),
 			activeLoans: num(summary.active_loans),
 			totalBorrowers: num(summary.total_borrowers),
 			par: num(summary.par_pct),
 		},
-		barChartData: (raw.time_series || []).map((row) => ({
-			name: formatBucketLabel(String(row.bucket_date || ''), granularity),
-			Disbursed: num(row.disbursed),
-			Scheduled: num(row.scheduled),
-			Prepayment: num(row.prepayment),
-		})),
+		barChartData: (raw.time_series || []).map((row) => {
+			const scheduled = num(row.scheduled);
+			const prepayment = num(row.prepayment);
+			return {
+				name: formatBucketLabel(String(row.bucket_date || ''), granularity),
+				Disbursed: num(row.disbursed),
+				Scheduled: scheduled,
+				Prepayment: prepayment,
+				Total: scheduled + prepayment,
+			};
+		}),
 		statusDistribution: (raw.status_distribution || []).map((row) => {
 			const status = String(row.status || 'unknown');
 			return {
