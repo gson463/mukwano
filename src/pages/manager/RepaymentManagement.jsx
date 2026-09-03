@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { format, startOfToday, isToday, isAfter, endOfToday } from 'date-fns';
+import { format, isAfter, endOfToday } from 'date-fns';
 import { format as formatTZ, toZonedTime } from 'date-fns-tz';
 import { supabase } from '@/lib/customSupabaseClient';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
@@ -28,6 +28,7 @@ import {
 import * as XLSX from 'xlsx';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Badge } from '@/components/ui/badge';
+import { getEatTodayDate, isEatTodayRange, formatDateFilterYmd } from '@/utils/dateValidation';
 import { getDisabledDates } from '@/utils/holidayUtils';
 import { statCardIconWellClass } from '@/lib/utils';
 import { getManagerBranchId } from '@/lib/managerBranch';
@@ -41,7 +42,7 @@ import {
 } from '@/lib/excelTable';
 
 const EAT_TIMEZONE = 'Africa/Nairobi';
-const REPAYMENT_PAGE_SIZE = 10;
+const REPAYMENT_PAGE_SIZE = 50;
 
 const StatCard = ({ title, value, icon: Icon, color }) => (
     <Card className="overflow-hidden border-none shadow-md hover:shadow-lg transition-all duration-300">
@@ -77,9 +78,9 @@ const ManagerRepaymentManagement = () => {
     const [searchTerm, setSearchTerm] = useState('');
     const [currentPage, setCurrentPage] = useState(1);
 
-    const [dateRangeFilter, setDateRangeFilter] = useState({
-        from: startOfToday(),
-        to: startOfToday(),
+    const [dateRangeFilter, setDateRangeFilter] = useState(() => {
+        const today = getEatTodayDate();
+        return { from: today, to: today };
     });
 
     const [scheduleDialogOpen, setScheduleDialogOpen] = useState(false);
@@ -94,7 +95,7 @@ const ManagerRepaymentManagement = () => {
         setLoanStatusFilter('all');
         setSearchTerm('');
         setCurrentPage(1);
-        setDateRangeFilter({ from: startOfToday(), to: startOfToday() });
+        setDateRangeFilter({ from: getEatTodayDate(), to: getEatTodayDate() });
     };
 
     const fetchContextData = useCallback(async () => {
@@ -167,11 +168,12 @@ const ManagerRepaymentManagement = () => {
                 .order('actual_payment_date', { ascending: false });
 
             if (dateRangeFilter?.from) {
-                query = query.gte('actual_payment_date', format(dateRangeFilter.from, 'yyyy-MM-dd'));
+                const fromYmd = formatDateFilterYmd(dateRangeFilter.from);
+                query = query.gte('actual_payment_date', fromYmd);
                 if (dateRangeFilter.to) {
-                    query = query.lte('actual_payment_date', format(dateRangeFilter.to, 'yyyy-MM-dd'));
+                    query = query.lte('actual_payment_date', formatDateFilterYmd(dateRangeFilter.to));
                 } else {
-                    query = query.lte('actual_payment_date', format(dateRangeFilter.from, 'yyyy-MM-dd'));
+                    query = query.lte('actual_payment_date', fromYmd);
                 }
             }
 
@@ -364,11 +366,18 @@ const ManagerRepaymentManagement = () => {
                     <CardHeader>
                         <CardTitle>Repayment Overview</CardTitle>
                         <CardDescription>
-                            Branch scope: repayments in range{' '}
-                            <span className="font-semibold text-primary">
+                            {repaymentsLoading ? (
+                                'Loading…'
+                            ) : (
+                                <>
+                                    <span className="font-semibold text-foreground">
+                                        {filteredRepayments.length} payment{filteredRepayments.length === 1 ? '' : 's'}
+                                    </span>
+                                    {' · Branch scope: repayments in range '}
+                                    <span className="font-semibold text-primary">
                                 {dateRangeFilter?.from ? (
                                     dateRangeFilter.to ? (
-                                        isToday(dateRangeFilter.from) && isToday(dateRangeFilter.to) ? (
+                                        isEatTodayRange(dateRangeFilter.from, dateRangeFilter.to) ? (
                                             'Today'
                                         ) : (
                                             `${format(dateRangeFilter.from, 'LLL dd, y')} - ${format(dateRangeFilter.to, 'LLL dd, y')}`
@@ -379,7 +388,14 @@ const ManagerRepaymentManagement = () => {
                                 ) : (
                                     'Select a date range'
                                 )}
-                            </span>
+                                    </span>
+                                    {filteredRepayments.length > REPAYMENT_PAGE_SIZE && (
+                                        <span className="block text-xs mt-1">
+                                            Use page arrows below to see all {filteredRepayments.length} rows ({REPAYMENT_PAGE_SIZE} per page).
+                                        </span>
+                                    )}
+                                </>
+                            )}
                         </CardDescription>
                     </CardHeader>
                     <CardContent>
@@ -525,7 +541,7 @@ const ManagerRepaymentManagement = () => {
                                         <CalendarIcon className="mr-2 h-4 w-4" />
                                         {dateRangeFilter?.from ? (
                                             dateRangeFilter.to ? (
-                                                isToday(dateRangeFilter.from) && isToday(dateRangeFilter.to) ? (
+                                                isEatTodayRange(dateRangeFilter.from, dateRangeFilter.to) ? (
                                                     'Today'
                                                 ) : (
                                                     `${format(dateRangeFilter.from, 'LLL dd, y')} - ${format(dateRangeFilter.to, 'LLL dd, y')}`
@@ -660,7 +676,7 @@ const ManagerRepaymentManagement = () => {
                                             <div className="flex flex-col items-center justify-center gap-2">
                                                 <Search className="h-8 w-8 text-gray-300" />
                                                 <p>No repayments found for the selected filters.</p>
-                                                {isToday(dateRangeFilter?.from) && isToday(dateRangeFilter?.to) && (
+                                                {isEatTodayRange(dateRangeFilter?.from, dateRangeFilter?.to) && (
                                                     <p className="text-xs">
                                                         Collections made today appear after they are recorded.
                                                     </p>

@@ -23,6 +23,24 @@ export const getTodayDateString = () => {
   return formatTZ(new Date(), 'yyyy-MM-dd', { timeZone: EAT_TIMEZONE });
 };
 
+/** Calendar Date for today in EAT (aligns repayment history filter with actual_payment_date). */
+export function getEatTodayDate() {
+  return parse(getTodayDateString(), 'yyyy-MM-dd', new Date());
+}
+
+/** True when both ends of a range are today in EAT (YYYY-MM-DD). */
+export function isEatTodayRange(from, to) {
+  if (!from || !to) return false;
+  const today = getTodayDateString();
+  return format(from, 'yyyy-MM-dd') === today && format(to, 'yyyy-MM-dd') === today;
+}
+
+/** Format a calendar Date as YYYY-MM-DD for repayment date filters. */
+export function formatDateFilterYmd(date) {
+  if (!date) return null;
+  return format(date, 'yyyy-MM-dd');
+}
+
 /**
  * Compare YYYY-MM-DD strings to today in EAT. True if ymd is strictly before today.
  * @param {string} ymd
