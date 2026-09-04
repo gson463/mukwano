@@ -63,12 +63,15 @@ Deno.serve(async (req: Request) => {
 
     const { data: pubTarget, error: pubErr } = await supabaseAdmin
       .from("users")
-      .select("id, full_name, email, role")
+      .select("id, full_name, email, role, branch_id, is_active")
       .eq("id", targetId)
       .maybeSingle();
 
     if (pubErr || !pubTarget?.id) {
       return json(404, { error: "User not found in directory" });
+    }
+    if (pubTarget.is_active === false) {
+      return json(400, { error: "Cannot impersonate an inactive user" });
     }
 
     const { data: targetAuth, error: targetAuthErr } = await supabaseAdmin.auth.admin.getUserById(
@@ -79,6 +82,18 @@ Deno.serve(async (req: Request) => {
     }
 
     const targetEmail = String(targetAuth.user.email).trim();
+
+    // Keep JWT user_metadata aligned with public.users so role routing works after verifyOtp.
+    const { error: metaErr } = await supabaseAdmin.auth.admin.updateUserById(targetId, {
+      user_metadata: {
+        role: pubTarget.role ?? null,
+        branch_id: pubTarget.branch_id ?? null,
+        full_name: pubTarget.full_name ?? null,
+      },
+    });
+    if (metaErr) {
+      console.warn("updateUserById metadata sync:", metaErr);
+    }
 
     const { data: linkOut, error: linkErr } = await supabaseAdmin.auth.admin.generateLink({
       type: "magiclink",

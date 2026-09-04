@@ -58,3 +58,12 @@ export function clearAdminImpersonationBackup() {
     /* ignore */
   }
 }
+
+/** Dashboard path after impersonating a user by role. */
+export function impersonationDashboardPath(role) {
+  const r = String(role ?? '').trim().toLowerCase();
+  if (r === 'manager') return '/manager/dashboard';
+  if (r === 'officer') return '/officer/dashboard';
+  if (r === 'admin') return '/admin/dashboard';
+  return '/';
+}

@@ -42,6 +42,7 @@ import {
   readAdminImpersonationBackup,
   hasStoredAdminImpersonationBackup,
   notifyImpersonationChange,
+  impersonationDashboardPath,
 } from '@/lib/adminImpersonation';
 
 const UserManagement = () => {
@@ -207,24 +208,31 @@ const UserManagement = () => {
       });
       return;
     }
-    if (!session?.access_token || !session?.refresh_token) {
-      toast({ title: 'Session error', description: 'Sign in again and retry.', variant: 'destructive' });
-      return;
-    }
-    if (row.id === session.user?.id) {
-      toast({ title: 'Cannot impersonate yourself', variant: 'destructive' });
-      return;
-    }
 
     setImpersonatingId(row.id);
     try {
-      saveAdminImpersonationBackupSilent(session);
+      await supabase.auth.refreshSession();
+      const {
+        data: { session: freshSession },
+        error: sessErr,
+      } = await supabase.auth.getSession();
+      if (sessErr || !freshSession?.access_token || !freshSession?.refresh_token) {
+        toast({ title: 'Session error', description: 'Sign in again and retry.', variant: 'destructive' });
+        return;
+      }
+      if (row.id === freshSession.user?.id) {
+        toast({ title: 'Cannot impersonate yourself', variant: 'destructive' });
+        return;
+      }
+
+      saveAdminImpersonationBackupSilent(freshSession);
 
       const { data, error: invokeError } = await supabase.functions.invoke('impersonate-start', {
         body: { user_id: row.id },
       });
 
-      let token_hash = typeof data?.token_hash === 'string' ? data.token_hash : null;
+      const token_hash = typeof data?.token_hash === 'string' ? data.token_hash : null;
+      const targetEmail = typeof data?.email === 'string' ? data.email : row.email;
 
       if (invokeError || !token_hash) {
         let serverMsg = invokeError?.message || 'Edge function failed.';
@@ -245,10 +253,17 @@ const UserManagement = () => {
         return;
       }
 
-      const { error: voErr } = await supabase.auth.verifyOtp({
-        token_hash,
-        type: 'magiclink',
-      });
+      let voErr = null;
+      const otpPayload = { token_hash, type: 'magiclink' };
+      if (targetEmail) otpPayload.email = targetEmail;
+      ({ error: voErr } = await supabase.auth.verifyOtp(otpPayload));
+      if (voErr) {
+        ({ error: voErr } = await supabase.auth.verifyOtp({
+          token_hash,
+          type: 'email',
+          ...(targetEmail ? { email: targetEmail } : {}),
+        }));
+      }
       if (voErr) {
         await restoreAdminSessionFromSilentBackup();
         toast({
@@ -260,11 +275,16 @@ const UserManagement = () => {
       }
 
       notifyImpersonationChange();
+      const impersonatedRole = (data?.target_role || row.role || '').toString().trim().toLowerCase();
+      const dest = impersonationDashboardPath(impersonatedRole);
       toast({
         title: `Viewing as ${row.full_name}`,
-        description: 'Use “End impersonation” at the top to return to admin.',
+        description:
+          impersonatedRole === 'manager' && !row.branch_id
+            ? 'Use “End impersonation” to return to admin. Assign a branch if this manager has none.'
+            : 'Use “End impersonation” at the top to return to admin.',
       });
-      navigate('/', { replace: true });
+      navigate(dest, { replace: true });
     } finally {
       setImpersonatingId(null);
     }
