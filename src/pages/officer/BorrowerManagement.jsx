@@ -72,9 +72,9 @@ import {
 import {
     shouldIncludeBorrowerByStatusAndSearch,
     borrowerMatchesGeneralSearch,
-    BORROWER_ACTIVE_LOAN_STATUS,
     BORROWER_LIST_SELECT,
     fetchNonActiveBorrowersByNameOrId,
+    fetchBorrowersWithOpenLoans,
 } from '@/lib/borrowerListFilters';
 
 function FieldRequired() {
@@ -202,23 +202,26 @@ const BorrowerManagement = () => {
         const branchId = profileRow?.branch_id ?? null;
         setOfficerBranchId(branchId);
 
-        const { data: borrowersData, error: borrowersError } = await supabase
-            .from('borrowers')
-            .select(BORROWER_LIST_SELECT)
-            .eq('loan_officer_id', user.id)
-            .eq('status', BORROWER_ACTIVE_LOAN_STATUS)
-            .order('first_name');
+        let borrowersData = [];
+        let borrowersError = null;
+        try {
+            borrowersData = await fetchBorrowersWithOpenLoans(supabase, {
+                select: BORROWER_LIST_SELECT,
+                officerId: user.id,
+            });
+        } catch (err) {
+            borrowersError = err;
+        }
 
         const countBase = () => supabase.from('borrowers').select('id', { count: 'exact', head: true }).eq('loan_officer_id', user.id);
-        const [totalC, activeC, eligibleC, defaultedC] = await Promise.all([
+        const [totalC, eligibleC, defaultedC] = await Promise.all([
             countBase(),
-            countBase().eq('status', 'active_loan'),
             countBase().eq('status', 'eligible'),
             countBase().eq('status', 'defaulted'),
         ]);
         setStatsCounts({
             total: totalC.count ?? 0,
-            active: activeC.count ?? 0,
+            active: borrowersData?.length ?? 0,
             eligible: eligibleC.count ?? 0,
             defaulted: defaultedC.count ?? 0,
         });
@@ -284,11 +287,13 @@ const BorrowerManagement = () => {
 
         const load = async () => {
             try {
+                const excludeIds = new Set(borrowers.map((b) => b.id));
                 const bySearch =
                     q.length >= 2
                         ? await fetchNonActiveBorrowersByNameOrId(supabase, {
                               searchQuery: q,
                               officerId: user.id,
+                              excludeBorrowerIds: excludeIds,
                           })
                         : [];
 
@@ -320,7 +325,7 @@ const BorrowerManagement = () => {
             cancelled = true;
             clearTimeout(t);
         };
-    }, [searchQuery, statusFilter, user]);
+    }, [searchQuery, statusFilter, user, borrowers]);
 
     const groupsInSelectedCenter = useMemo(() => {
         if (!formData.center_id) return [];

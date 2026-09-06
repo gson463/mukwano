@@ -25,15 +25,16 @@ import { Label } from '@/components/ui/label';
 import {
     shouldIncludeBorrowerByStatusAndSearch,
     borrowerMatchesGeneralSearch,
-    BORROWER_ACTIVE_LOAN_STATUS,
-    BORROWER_LIST_SELECT,
+    BORROWER_ADMIN_LIST_SELECT,
     fetchNonActiveBorrowersByNameOrId,
+    fetchBorrowersWithOpenLoans,
 } from '@/lib/borrowerListFilters';
 
 const AdminBorrowerManagement = () => {
     const { toast } = useToast();
     const [borrowers, setBorrowers] = useState([]);
     const [searchExtraBorrowers, setSearchExtraBorrowers] = useState([]);
+    const [branches, setBranches] = useState([]);
     const [loading, setLoading] = useState(true);
     const [searchQuery, setSearchQuery] = useState('');
     const [statusFilter, setStatusFilter] = useState('active_loan');
@@ -48,32 +49,41 @@ const AdminBorrowerManagement = () => {
 
     const fetchData = useCallback(async () => {
         setLoading(true);
-        const [borrowersRes, centersRes, groupsRes] = await Promise.all([
-            supabase
-                .from('borrowers')
-                .select(BORROWER_LIST_SELECT)
-                .eq('status', BORROWER_ACTIVE_LOAN_STATUS)
-                .order('first_name'),
-            supabase.from('centers').select('id, name, branch_id'),
-            supabase.from('groups').select('*'),
-        ]);
+        try {
+            const [openLoanBorrowers, centersRes, groupsRes, branchesRes] = await Promise.all([
+                fetchBorrowersWithOpenLoans(supabase, { select: BORROWER_ADMIN_LIST_SELECT }),
+                supabase.from('centers').select('id, name, branch_id'),
+                supabase.from('groups').select('id, name, center_id'),
+                supabase.from('branches').select('id, name').order('name'),
+            ]);
 
-        if (borrowersRes.error) {
-            toast({ title: 'Error fetching borrowers', description: borrowersRes.error.message, variant: 'destructive' });
-        } else {
-            setBorrowers(borrowersRes.data || []);
+            setBorrowers(openLoanBorrowers || []);
+
+            if (centersRes.error) {
+                toast({ title: 'Error fetching centers', description: centersRes.error.message, variant: 'destructive' });
+            } else {
+                setCenters(centersRes.data || []);
+            }
+            if (groupsRes.error) {
+                toast({ title: 'Error fetching groups', description: groupsRes.error.message, variant: 'destructive' });
+            } else {
+                setGroups(groupsRes.data || []);
+            }
+            if (branchesRes.error) {
+                toast({ title: 'Error fetching branches', description: branchesRes.error.message, variant: 'destructive' });
+            } else {
+                setBranches(branchesRes.data || []);
+            }
+        } catch (error) {
+            toast({
+                title: 'Error fetching borrowers',
+                description: error?.message || 'Failed to load borrowers with active loans',
+                variant: 'destructive',
+            });
+            setBorrowers([]);
+        } finally {
+            setLoading(false);
         }
-        if (centersRes.error) {
-            toast({ title: 'Error fetching centers', description: centersRes.error.message, variant: 'destructive' });
-        } else {
-            setCenters(centersRes.data || []);
-        }
-        if (groupsRes.error) {
-            toast({ title: 'Error fetching groups', description: groupsRes.error.message, variant: 'destructive' });
-        } else {
-            setGroups(groupsRes.data || []);
-        }
-        setLoading(false);
     }, [toast]);
 
     useEffect(() => {
@@ -85,21 +95,27 @@ const AdminBorrowerManagement = () => {
         const statusNeedsLoad =
             statusFilter === 'eligible' ||
             statusFilter === 'defaulted' ||
-            statusFilter === 'paid_up' ||
-            statusFilter === 'active';
+            statusFilter === 'paid_up';
 
         let cancelled = false;
 
         const load = async () => {
             try {
+                const excludeIds = new Set(borrowers.map((b) => b.id));
                 const bySearch =
-                    q.length >= 2 ? await fetchNonActiveBorrowersByNameOrId(supabase, { searchQuery: q }) : [];
+                    q.length >= 2
+                        ? await fetchNonActiveBorrowersByNameOrId(supabase, {
+                              searchQuery: q,
+                              select: BORROWER_ADMIN_LIST_SELECT,
+                              excludeBorrowerIds: excludeIds,
+                          })
+                        : [];
 
                 let byStatus = [];
                 if (statusNeedsLoad) {
                     const { data, error } = await supabase
                         .from('borrowers')
-                        .select(BORROWER_LIST_SELECT)
+                        .select(BORROWER_ADMIN_LIST_SELECT)
                         .eq('status', statusFilter)
                         .order('first_name')
                         .limit(500);
@@ -123,7 +139,7 @@ const AdminBorrowerManagement = () => {
             cancelled = true;
             clearTimeout(t);
         };
-    }, [searchQuery, statusFilter]);
+    }, [searchQuery, statusFilter, borrowers]);
 
     const allBorrowersForFilters = useMemo(() => {
         const byId = new Map();
@@ -133,13 +149,10 @@ const AdminBorrowerManagement = () => {
     }, [borrowers, searchExtraBorrowers]);
 
     const branchOptions = useMemo(() => {
-        const m = new Map();
-        for (const b of allBorrowersForFilters) {
-            const br = b.branches;
-            if (br?.id) m.set(br.id, br.name);
-        }
-        return [...m.entries()].sort((a, b) => a[1].localeCompare(b[1]));
-    }, [allBorrowersForFilters]);
+        return (branches || [])
+            .map((b) => [b.id, b.name])
+            .sort((a, b) => String(a[1]).localeCompare(String(b[1])));
+    }, [branches]);
 
     const centersInSelect = useMemo(
         () => adminCentersForSelect(centers, branchFilter),
@@ -267,7 +280,7 @@ const AdminBorrowerManagement = () => {
             <Card>
                 <CardHeader>
                     <div className="flex flex-col gap-4">
-                        <CardTitle>All System Borrowers ({filteredBorrowers.length})</CardTitle>
+                        <CardTitle>Borrowers with Active Loans ({filteredBorrowers.length})</CardTitle>
                         <div className="flex flex-wrap items-center gap-2">
                             <Input
                                 placeholder="Search name or borrower ID (eligible / paid-up appear here)…"
@@ -319,9 +332,8 @@ const AdminBorrowerManagement = () => {
                                     <SelectValue placeholder="Status" />
                                 </SelectTrigger>
                                 <SelectContent>
-                                    <SelectItem value="active_loan">Active Loan</SelectItem>
+                                    <SelectItem value="active_loan">With active loan</SelectItem>
                                     <SelectItem value="eligible">Eligible</SelectItem>
-                                    <SelectItem value="active">Active</SelectItem>
                                     <SelectItem value="defaulted">Defaulted</SelectItem>
                                     <SelectItem value="paid_up">Paid Up</SelectItem>
                                     <SelectItem value="all">All (search for non-active)</SelectItem>
