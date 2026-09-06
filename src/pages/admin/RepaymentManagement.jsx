@@ -1,8 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { format, startOfToday, startOfDay, endOfDay, subMonths } from 'date-fns';
+import { format, isAfter, endOfToday } from 'date-fns';
 import { format as formatTZ, toZonedTime } from 'date-fns-tz';
 import { supabase } from '@/lib/customSupabaseClient';
-import { useAuth } from '@/contexts/SupabaseAuthContext';
 import { useToast } from '@/components/ui/use-toast';
 import DashboardLayout from '@/components/layout/DashboardLayout';
 import { Button } from '@/components/ui/button';
@@ -28,6 +27,7 @@ import {
 import { DEFAULT_TABLE_PAGE_SIZE, getTotalPages, slicePage } from '@/lib/tablePagination';
 import { TablePaginationBar } from '@/components/table/TablePaginationBar';
 import { adminCentersForSelect, adminGroupsForSelect, resolveBorrowerCenterId } from '@/lib/adminHierarchyFilters';
+import { getEatTodayDate, isEatTodayRange, formatDateFilterYmd } from '@/utils/dateValidation';
 
 const EAT_TIMEZONE = 'Africa/Nairobi';
 
@@ -43,7 +43,6 @@ const REPAYMENT_ADMIN_SELECT = [
   'loans (id, borrower_id, loan_id, borrowers (id, first_name, surname, group_id, branch_id, center_id, borrower_id, groups (id, name, center_id)))',
 ].join(',');
 
-const DEFAULT_RANGE_MONTHS = 12;
 const FETCH_HARD_LIMIT = 25000;
 
 const StatCard = ({ title, value, icon: Icon, color }) => (
@@ -73,10 +72,10 @@ const AdminRepaymentManagement = () => {
     const [officerFilter, setOfficerFilter] = useState('all');
     const [centerFilter, setCenterFilter] = useState('all');
     const [groupFilter, setGroupFilter] = useState('all');
-    const [dateRangeFilter, setDateRangeFilter] = useState(() => ({
-        from: startOfDay(subMonths(new Date(), DEFAULT_RANGE_MONTHS)),
-        to: endOfDay(new Date()),
-    }));
+    const [dateRangeFilter, setDateRangeFilter] = useState(() => {
+        const today = getEatTodayDate();
+        return { from: today, to: today };
+    });
     const [searchQuery, setSearchQuery] = useState('');
     const [currentPage, setCurrentPage] = useState(1);
 
@@ -88,10 +87,7 @@ const AdminRepaymentManagement = () => {
         setOfficerFilter('all');
         setCenterFilter('all');
         setGroupFilter('all');
-        setDateRangeFilter({
-            from: startOfDay(subMonths(new Date(), DEFAULT_RANGE_MONTHS)),
-            to: endOfDay(new Date()),
-        });
+        setDateRangeFilter({ from: getEatTodayDate(), to: getEatTodayDate() });
         setSearchQuery('');
         setCurrentPage(1);
     };
@@ -120,18 +116,24 @@ const AdminRepaymentManagement = () => {
             if (centersError) throw centersError;
             setCenters(centersData || []);
 
-            const fromD = dateRangeFilter?.from
-                ? startOfDay(dateRangeFilter.from)
-                : startOfDay(subMonths(new Date(), DEFAULT_RANGE_MONTHS * 2));
-            const toD = dateRangeFilter?.to != null ? endOfDay(dateRangeFilter.to) : endOfDay(new Date());
-
             let rq = supabase
                 .from('repayments')
                 .select(REPAYMENT_ADMIN_SELECT)
-                .gte('actual_payment_date', fromD.toISOString())
-                .lte('actual_payment_date', toD.toISOString())
                 .order('actual_payment_date', { ascending: false })
                 .limit(FETCH_HARD_LIMIT);
+
+            if (dateRangeFilter?.from) {
+                const fromYmd = formatDateFilterYmd(dateRangeFilter.from);
+                rq = rq.gte('actual_payment_date', fromYmd);
+                if (dateRangeFilter.to) {
+                    rq = rq.lte('actual_payment_date', formatDateFilterYmd(dateRangeFilter.to));
+                } else {
+                    rq = rq.lte('actual_payment_date', fromYmd);
+                }
+            } else {
+                const todayYmd = formatDateFilterYmd(getEatTodayDate());
+                rq = rq.gte('actual_payment_date', todayYmd).lte('actual_payment_date', todayYmd);
+            }
 
             const { data: repaymentsData, error: repaymentsError } = await rq;
             if (repaymentsError) throw repaymentsError;
@@ -306,8 +308,8 @@ const AdminRepaymentManagement = () => {
                     <CardHeader>
                         <CardTitle>Filters</CardTitle>
                         <CardDescription>
-                            Repayments load for the selected date range (up to {FETCH_HARD_LIMIT.toLocaleString()} rows). Changing the range reloads
-                            from the server—narrow dates if the list is large.
+                            Defaults to today (EAT). Change the date range to load history (up to{' '}
+                            {FETCH_HARD_LIMIT.toLocaleString()} rows).
                         </CardDescription>
                     </CardHeader>
                     <CardContent className="flex flex-wrap items-center gap-4">
@@ -361,20 +363,34 @@ const AdminRepaymentManagement = () => {
                             <PopoverTrigger asChild>
                                 <Button variant="outline" className="w-[280px] justify-start text-left font-normal border-gray-200">
                                     <CalendarIcon className="mr-2 h-4 w-4" />
-                                    {dateRangeFilter?.from ? (dateRangeFilter.to ? `${format(dateRangeFilter.from, "LLL dd, y")} - ${format(dateRangeFilter.to, "LLL dd, y")}` : format(dateRangeFilter.from, "LLL dd, y")) : <span>Pick a date range</span>}
+                                    {dateRangeFilter?.from ? (
+                                        dateRangeFilter.to ? (
+                                            isEatTodayRange(dateRangeFilter.from, dateRangeFilter.to) ? (
+                                                'Today'
+                                            ) : (
+                                                `${format(dateRangeFilter.from, 'LLL dd, y')} - ${format(dateRangeFilter.to, 'LLL dd, y')}`
+                                            )
+                                        ) : (
+                                            format(dateRangeFilter.from, 'LLL dd, y')
+                                        )
+                                    ) : (
+                                        <span>Pick a date range</span>
+                                    )}
                                 </Button>
                             </PopoverTrigger>
                             <PopoverContent className="w-auto p-0" align="start">
-                                <Calendar 
-                                    mode="range" 
-                                    selected={dateRangeFilter} 
-                                    onSelect={handleDateRangeSelect} 
-                                    numberOfMonths={2} 
-                                    disabled={[...getDisabledDates(), { from: startOfToday() }]} 
+                                <Calendar
+                                    mode="range"
+                                    selected={dateRangeFilter}
+                                    onSelect={handleDateRangeSelect}
+                                    numberOfMonths={2}
+                                    disabled={[...getDisabledDates(), (date) => isAfter(date, endOfToday())]}
                                 />
                             </PopoverContent>
                         </Popover>
-                        <Button onClick={resetFilters} variant="ghost"><X className="mr-2 h-4 w-4"/> Reset</Button>
+                        <Button onClick={resetFilters} variant="ghost">
+                            <X className="mr-2 h-4 w-4" /> Reset to today
+                        </Button>
                     </CardContent>
                 </Card>
 
