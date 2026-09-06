@@ -11,6 +11,7 @@ import { motion } from 'framer-motion';
 import { Button } from '@/components/ui/button';
 import { Calendar } from '@/components/ui/calendar';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { supabase } from '@/lib/customSupabaseClient';
 import { getManagerBranchId } from '@/lib/managerBranch';
 import { useToast } from '@/components/ui/use-toast';
 const StatCard = ({ title, value, icon: Icon, gradient, onClick }) => (
@@ -85,7 +86,15 @@ const BranchManagerDashboard = () => {
   const fetchDashboardData = useCallback(async (start, end) => {
       if (!user) return;
       const branchId = await getManagerBranchId(user);
-      if (!branchId) return;
+      if (!branchId) {
+          toast({
+              title: 'Branch not assigned',
+              description: 'This manager has no branch_id. Assign a branch in User or Branch Management.',
+              variant: 'destructive',
+          });
+          setLoading(false);
+          return;
+      }
       setLoading(true);
       try {
           const { data: configData } = await supabase.from('system_config').select('value').eq('key', 'currency').single();
@@ -126,7 +135,7 @@ const BranchManagerDashboard = () => {
           console.error('Error fetching dashboard data:', error);
           toast({
               title: 'Error',
-              description: 'Could not fetch dashboard data for your branch.',
+              description: error?.message || 'Could not fetch dashboard data for your branch.',
               variant: 'destructive',
           });
       } finally {
