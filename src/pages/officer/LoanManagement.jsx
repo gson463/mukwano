@@ -24,6 +24,7 @@ import { addDays, format as formatDate, isAfter, parse } from 'date-fns';
 import { motion, AnimatePresence } from 'framer-motion';
 import { BorrowerSearchSelect } from '@/components/BorrowerSearchSelect';
 import { statCardIconWellClass } from '@/lib/utils';
+import { shouldIncludeLoanByStatusAndSearch } from '@/lib/loanListFilters';
 
 const EAT_TIMEZONE = 'Africa/Nairobi';
 const LOAN_PAGE_SIZE = 10;
@@ -247,18 +248,10 @@ const LoanManagement = () => {
 
     const filteredLoans = useMemo(() => {
         return loans.filter((loan) => {
+            if (!shouldIncludeLoanByStatusAndSearch(loan, { searchQuery, statusFilter })) {
+                return false;
+            }
             const b = loan.borrowers;
-            const borrowerName = `${b?.first_name || ''} ${b?.surname || ''}`.toLowerCase();
-            const query = searchQuery.toLowerCase();
-            const qPhone = b?.phone_number && String(b.phone_number).toLowerCase().includes(query);
-            const qBorrowerId = b?.borrower_id && String(b.borrower_id).toLowerCase().includes(query);
-            const matchesSearch =
-                loan.loan_id.toLowerCase().includes(query) ||
-                borrowerName.includes(query) ||
-                loan.principal.toString().includes(query) ||
-                (qPhone ?? false) ||
-                (qBorrowerId ?? false);
-            const matchesStatus = statusFilter === 'all' || loan.status === statusFilter;
             const matchesProduct = productFilter === 'all' || loan.product_id === productFilter;
             const centerId = b ? resolveBorrowerCenterId(b) : null;
             const matchesCenter = centerFilter === 'all' || centerId === centerFilter;
@@ -276,14 +269,7 @@ const LoanManagement = () => {
                     toZonedTime(dateRange.from, EAT_TIMEZONE);
             }
 
-            return (
-                matchesSearch &&
-                matchesStatus &&
-                matchesProduct &&
-                matchesDate &&
-                matchesCenter &&
-                matchesGroup
-            );
+            return matchesProduct && matchesDate && matchesCenter && matchesGroup;
         });
     }, [
         loans,
@@ -901,7 +887,7 @@ const LoanManagement = () => {
                             <div className="flex w-full flex-col gap-2 lg:flex-row lg:flex-wrap lg:items-end">
                                 <div className="min-w-0 flex-1 lg:min-w-[12rem]">
                                     <Input
-                                        placeholder="Search loan ID, borrower, phone, amount…"
+                                        placeholder="Search name or loan ID (paid loans appear here)…"
                                         value={searchQuery}
                                         onChange={(e) => setSearchQuery(e.target.value)}
                                         className="w-full"
@@ -953,11 +939,10 @@ const LoanManagement = () => {
                                         <SelectValue placeholder="Status" />
                                     </SelectTrigger>
                                     <SelectContent>
-                                        <SelectItem value="all">All statuses</SelectItem>
                                         <SelectItem value="active">Active</SelectItem>
                                         <SelectItem value="delinquent">Delinquent</SelectItem>
                                         <SelectItem value="defaulted">Defaulted</SelectItem>
-                                        <SelectItem value="paid">Paid</SelectItem>
+                                        <SelectItem value="all">Open statuses</SelectItem>
                                     </SelectContent>
                                 </Select>
                                 <Select value={productFilter} onValueChange={setProductFilter}>

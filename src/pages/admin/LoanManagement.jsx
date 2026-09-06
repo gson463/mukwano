@@ -32,6 +32,7 @@ import {
     adminGroupsForLoanTable,
     resolveBorrowerCenterId,
 } from '@/lib/adminHierarchyFilters';
+import { shouldIncludeLoanByStatusAndSearch } from '@/lib/loanListFilters';
 
 const EAT_TIMEZONE = 'Africa/Nairobi';
 
@@ -201,18 +202,10 @@ const AdminLoanManagement = () => {
 
     const filteredLoans = useMemo(() => {
         return loans.filter((loan) => {
+            if (!shouldIncludeLoanByStatusAndSearch(loan, { searchQuery, statusFilter })) {
+                return false;
+            }
             const b = loan.borrowers;
-            const borrowerName = `${b?.first_name || ''} ${b?.surname || ''}`.toLowerCase();
-            const query = searchQuery.toLowerCase();
-            const qPhone = b?.phone_number && String(b.phone_number).toLowerCase().includes(query);
-            const qBid = b?.borrower_id && String(b.borrower_id).toLowerCase().includes(query);
-            const matchesSearch =
-                loan.loan_id.toLowerCase().includes(query) ||
-                borrowerName.includes(query) ||
-                loan.principal.toString().includes(query) ||
-                (qPhone ?? false) ||
-                (qBid ?? false);
-            const matchesStatus = statusFilter === 'all' || loan.status === statusFilter;
             const matchesProduct = productFilter === 'all' || loan.product_id === productFilter;
             const matchesOfficer = officerFilter === 'all' || loan.officer_id === officerFilter;
             const matchesBranch = branchFilter === 'all' || loan.officer?.branch_id === branchFilter;
@@ -230,8 +223,6 @@ const AdminLoanManagement = () => {
             }
 
             return (
-                matchesSearch &&
-                matchesStatus &&
                 matchesProduct &&
                 matchesOfficer &&
                 matchesBranch &&
@@ -354,7 +345,7 @@ const AdminLoanManagement = () => {
                         <div className="flex flex-col gap-4">
                             <CardTitle>Loans List ({filteredLoans.length})</CardTitle>
                             <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
-                                <Input placeholder="Search…" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} />
+                                <Input placeholder="Search name or loan ID (paid loans appear here)…" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} />
                                 
                                 <Select value={branchFilter} onValueChange={setBranchFilter}>
                                     <SelectTrigger><SelectValue placeholder="Filter by Branch" /></SelectTrigger>
@@ -402,8 +393,7 @@ const AdminLoanManagement = () => {
                                         <SelectItem value="active">Active</SelectItem>
                                         <SelectItem value="delinquent">Delinquent</SelectItem>
                                         <SelectItem value="defaulted">Defaulted</SelectItem>
-                                        <SelectItem value="paid">Paid</SelectItem>
-                                        <SelectItem value="all">All Statuses</SelectItem>
+                                        <SelectItem value="all">Open statuses</SelectItem>
                                     </SelectContent>
                                 </Select>
                                 

@@ -18,6 +18,7 @@ import { getDisabledDates } from '@/utils/holidayUtils';
 import { BorrowerSearchSelect } from '@/components/BorrowerSearchSelect';
 import { statCardIconWellClass } from '@/lib/utils';
 import { getManagerBranchId } from '@/lib/managerBranch';
+import { shouldIncludeLoanByStatusAndSearch } from '@/lib/loanListFilters';
 import {
     excelEmptyStateCellClassName,
     excelTableClassName,
@@ -206,18 +207,10 @@ const ManagerLoanManagement = () => {
 
     const filteredLoans = useMemo(() => {
         return loans.filter((loan) => {
+            if (!shouldIncludeLoanByStatusAndSearch(loan, { searchQuery, statusFilter })) {
+                return false;
+            }
             const b = loan.borrowers;
-            const borrowerName = `${b?.first_name || ''} ${b?.surname || ''}`.toLowerCase();
-            const query = searchQuery.toLowerCase();
-            const qPhone = b?.phone_number && String(b.phone_number).toLowerCase().includes(query);
-            const qBorrowerId = b?.borrower_id && String(b.borrower_id).toLowerCase().includes(query);
-            const matchesSearch =
-                loan.loan_id.toLowerCase().includes(query) ||
-                borrowerName.includes(query) ||
-                loan.principal.toString().includes(query) ||
-                (qPhone ?? false) ||
-                (qBorrowerId ?? false);
-            const matchesStatus = statusFilter === 'all' || loan.status === statusFilter;
             const matchesProduct = productFilter === 'all' || loan.product_id === productFilter;
             const matchesOfficer = officerFilter === 'all' || loan.officer_id === officerFilter;
             const matchesBorrower = !borrowerFilter || loan.borrower_id === borrowerFilter;
@@ -238,8 +231,6 @@ const ManagerLoanManagement = () => {
             }
 
             return (
-                matchesSearch &&
-                matchesStatus &&
                 matchesProduct &&
                 matchesOfficer &&
                 matchesBorrower &&
@@ -406,7 +397,7 @@ const ManagerLoanManagement = () => {
                                 </Select>
                                 <div className="min-w-0 flex-1 lg:min-w-[12rem]">
                                     <Input
-                                        placeholder="Search loan ID, borrower, phone, amount…"
+                                        placeholder="Search name or loan ID (paid loans appear here)…"
                                         value={searchQuery}
                                         onChange={(e) => setSearchQuery(e.target.value)}
                                         className="w-full"
@@ -420,8 +411,7 @@ const ManagerLoanManagement = () => {
                                         <SelectItem value="active">Active</SelectItem>
                                         <SelectItem value="delinquent">Delinquent</SelectItem>
                                         <SelectItem value="defaulted">Defaulted</SelectItem>
-                                        <SelectItem value="paid">Paid</SelectItem>
-                                        <SelectItem value="all">All Statuses</SelectItem>
+                                        <SelectItem value="all">Open statuses</SelectItem>
                                     </SelectContent>
                                 </Select>
                                 <Select value={productFilter} onValueChange={setProductFilter}>
