@@ -69,6 +69,13 @@ import {
     isVotersIdIdentificationType,
     isDriversLicenseIdentificationType,
 } from '@/lib/borrowerIdValidation';
+import {
+    shouldIncludeBorrowerByStatusAndSearch,
+    borrowerMatchesGeneralSearch,
+    BORROWER_ACTIVE_LOAN_STATUS,
+    BORROWER_LIST_SELECT,
+    fetchNonActiveBorrowersByNameOrId,
+} from '@/lib/borrowerListFilters';
 
 function FieldRequired() {
     return <span className="text-destructive ml-0.5" aria-hidden>*</span>;
@@ -108,6 +115,8 @@ const BorrowerManagement = () => {
     const { toast } = useToast();
     const navigate = useNavigate();
     const [borrowers, setBorrowers] = useState([]);
+    const [searchExtraBorrowers, setSearchExtraBorrowers] = useState([]);
+    const [statsCounts, setStatsCounts] = useState({ total: 0, active: 0, eligible: 0, defaulted: 0 });
     const [groups, setGroups] = useState([]);
     const [centers, setCenters] = useState([]);
     const [officerBranchId, setOfficerBranchId] = useState(null);
@@ -133,7 +142,7 @@ const BorrowerManagement = () => {
     const [searchQuery, setSearchQuery] = useState('');
     const [centerFilter, setCenterFilter] = useState('all');
     const [groupFilter, setGroupFilter] = useState('all');
-    const [statusFilter, setStatusFilter] = useState('all');
+    const [statusFilter, setStatusFilter] = useState('active_loan');
     const [idReviewFilter, setIdReviewFilter] = useState('all');
     const [currentPage, setCurrentPage] = useState(1);
 
@@ -195,8 +204,24 @@ const BorrowerManagement = () => {
 
         const { data: borrowersData, error: borrowersError } = await supabase
             .from('borrowers')
-            .select('*, users (full_name), branches (id, name), groups (id, name, center_id)')
-            .eq('loan_officer_id', user.id);
+            .select(BORROWER_LIST_SELECT)
+            .eq('loan_officer_id', user.id)
+            .eq('status', BORROWER_ACTIVE_LOAN_STATUS)
+            .order('first_name');
+
+        const countBase = () => supabase.from('borrowers').select('id', { count: 'exact', head: true }).eq('loan_officer_id', user.id);
+        const [totalC, activeC, eligibleC, defaultedC] = await Promise.all([
+            countBase(),
+            countBase().eq('status', 'active_loan'),
+            countBase().eq('status', 'eligible'),
+            countBase().eq('status', 'defaulted'),
+        ]);
+        setStatsCounts({
+            total: totalC.count ?? 0,
+            active: activeC.count ?? 0,
+            eligible: eligibleC.count ?? 0,
+            defaulted: defaultedC.count ?? 0,
+        });
 
         const { data: groupsData, error: groupsError } = await supabase
             .from('groups')
@@ -246,6 +271,56 @@ const BorrowerManagement = () => {
     useEffect(() => {
         fetchData();
     }, [fetchData]);
+
+    useEffect(() => {
+        if (!user) return;
+        const q = searchQuery.trim();
+        const statusNeedsLoad =
+            statusFilter === 'eligible' ||
+            statusFilter === 'defaulted' ||
+            statusFilter === 'paid_up';
+
+        let cancelled = false;
+
+        const load = async () => {
+            try {
+                const bySearch =
+                    q.length >= 2
+                        ? await fetchNonActiveBorrowersByNameOrId(supabase, {
+                              searchQuery: q,
+                              officerId: user.id,
+                          })
+                        : [];
+
+                let byStatus = [];
+                if (statusNeedsLoad) {
+                    const { data, error } = await supabase
+                        .from('borrowers')
+                        .select(BORROWER_LIST_SELECT)
+                        .eq('loan_officer_id', user.id)
+                        .eq('status', statusFilter)
+                        .order('first_name');
+                    if (error) throw error;
+                    byStatus = data || [];
+                }
+
+                const map = new Map();
+                for (const b of [...bySearch, ...byStatus]) {
+                    if (b?.id) map.set(b.id, b);
+                }
+                if (!cancelled) setSearchExtraBorrowers([...map.values()]);
+            } catch (e) {
+                console.error(e);
+                if (!cancelled) setSearchExtraBorrowers([]);
+            }
+        };
+
+        const t = setTimeout(load, q.length >= 2 ? 300 : 0);
+        return () => {
+            cancelled = true;
+            clearTimeout(t);
+        };
+    }, [searchQuery, statusFilter, user]);
 
     const groupsInSelectedCenter = useMemo(() => {
         if (!formData.center_id) return [];
@@ -331,25 +406,25 @@ const BorrowerManagement = () => {
     );
 
     const filteredBorrowers = useMemo(() => {
-        return borrowers.filter((b) => {
-            const query = searchQuery.toLowerCase();
+        const byId = new Map();
+        for (const b of borrowers) byId.set(b.id, b);
+        for (const b of searchExtraBorrowers) byId.set(b.id, b);
+        return [...byId.values()].filter((b) => {
+            if (!shouldIncludeBorrowerByStatusAndSearch(b, { searchQuery, statusFilter })) {
+                return false;
+            }
             const centerId = resolveBorrowerCenterId(b);
             const centerName = centerId ? centers.find((c) => c.id === centerId)?.name : '';
             const groupNameFromMap = b.group_id ? groups.find((g) => g.id === b.group_id)?.name : '';
-            const matchesSearch =
-                (b.first_name || '').toLowerCase().includes(query) ||
-                (b.surname || '').toLowerCase().includes(query) ||
-                (b.borrower_id && String(b.borrower_id).toLowerCase().includes(query)) ||
-                (b.phone_number && String(b.phone_number).toLowerCase().includes(query)) ||
-                (b.identification_number && String(b.identification_number).toLowerCase().includes(query)) ||
-                (b.users?.full_name && b.users.full_name.toLowerCase().includes(query)) ||
-                (b.branches?.name && b.branches.name.toLowerCase().includes(query)) ||
-                (b.groups?.name && b.groups.name.toLowerCase().includes(query)) ||
-                (groupNameFromMap && groupNameFromMap.toLowerCase().includes(query)) ||
-                (centerName && centerName.toLowerCase().includes(query));
+            const matchesSearch = borrowerMatchesGeneralSearch(b, searchQuery, [
+                b.users?.full_name,
+                b.branches?.name,
+                b.groups?.name,
+                groupNameFromMap,
+                centerName,
+            ]);
             const matchesCenter = centerFilter === 'all' || centerId === centerFilter;
             const matchesGroup = groupFilter === 'all' || b.group_id === groupFilter;
-            const matchesStatus = statusFilter === 'all' || b.status === statusFilter;
             const needsReview = borrowerRowNeedsDataReview(b);
             const isDupRow = borrowerRowIsDuplicateRecord(b);
             const matchesIdReview =
@@ -357,10 +432,11 @@ const BorrowerManagement = () => {
                 (idReviewFilter === 'needs_review' && needsReview) ||
                 (idReviewFilter === 'is_duplicate' && isDupRow) ||
                 (idReviewFilter === 'ok' && !needsReview && !isDupRow);
-            return matchesSearch && matchesCenter && matchesGroup && matchesStatus && matchesIdReview;
+            return matchesSearch && matchesCenter && matchesGroup && matchesIdReview;
         });
     }, [
         borrowers,
+        searchExtraBorrowers,
         centers,
         groups,
         searchQuery,
@@ -628,12 +704,12 @@ const BorrowerManagement = () => {
 
     const stats = useMemo(() => {
         return {
-            total: borrowers.length,
-            active: borrowers.filter((b) => b.status === 'active_loan').length,
-            eligible: borrowers.filter((b) => b.status === 'eligible').length,
-            defaulted: borrowers.filter((b) => b.status === 'defaulted').length,
+            total: statsCounts.total,
+            active: statsCounts.active,
+            eligible: statsCounts.eligible,
+            defaulted: statsCounts.defaulted,
         };
-    }, [borrowers]);
+    }, [statsCounts]);
 
     const handleSave = async (bypassSimilarName = false) => {
         setIsSaving(true);
@@ -1747,7 +1823,7 @@ const BorrowerManagement = () => {
                             <div className="flex w-full flex-col gap-2 lg:flex-row lg:flex-wrap lg:items-end">
                                 <div className="min-w-0 flex-1 lg:min-w-[12rem]">
                                     <Input
-                                        placeholder="Search: name, borrower ID, phone, ID no., officer, branch, centre, group…"
+                                        placeholder="Search name or borrower ID (eligible / paid-up appear here)…"
                                         value={searchQuery}
                                         onChange={(e) => setSearchQuery(e.target.value)}
                                         className="w-full"
@@ -1804,11 +1880,11 @@ const BorrowerManagement = () => {
                                         <SelectValue placeholder="Status" />
                                     </SelectTrigger>
                                     <SelectContent>
-                                        <SelectItem value="all">All statuses</SelectItem>
-                                        <SelectItem value="eligible">Eligible</SelectItem>
                                         <SelectItem value="active_loan">Active Loan</SelectItem>
+                                        <SelectItem value="eligible">Eligible</SelectItem>
                                         <SelectItem value="defaulted">Defaulted</SelectItem>
                                         <SelectItem value="paid_up">Paid Up</SelectItem>
+                                        <SelectItem value="all">All (search for non-active)</SelectItem>
                                     </SelectContent>
                                 </Select>
                                 <Select value={idReviewFilter} onValueChange={setIdReviewFilter}>

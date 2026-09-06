@@ -22,13 +22,21 @@ import { TablePaginationBar } from '@/components/table/TablePaginationBar';
 import { adminCentersForSelect, adminGroupsForSelect, resolveBorrowerCenterId } from '@/lib/adminHierarchyFilters';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
+import {
+    shouldIncludeBorrowerByStatusAndSearch,
+    borrowerMatchesGeneralSearch,
+    BORROWER_ACTIVE_LOAN_STATUS,
+    BORROWER_LIST_SELECT,
+    fetchNonActiveBorrowersByNameOrId,
+} from '@/lib/borrowerListFilters';
 
 const AdminBorrowerManagement = () => {
     const { toast } = useToast();
     const [borrowers, setBorrowers] = useState([]);
+    const [searchExtraBorrowers, setSearchExtraBorrowers] = useState([]);
     const [loading, setLoading] = useState(true);
     const [searchQuery, setSearchQuery] = useState('');
-    const [statusFilter, setStatusFilter] = useState('all');
+    const [statusFilter, setStatusFilter] = useState('active_loan');
     const [branchFilter, setBranchFilter] = useState('all');
     const [centerFilter, setCenterFilter] = useState('all');
     const [groupFilter, setGroupFilter] = useState('all');
@@ -43,7 +51,9 @@ const AdminBorrowerManagement = () => {
         const [borrowersRes, centersRes, groupsRes] = await Promise.all([
             supabase
                 .from('borrowers')
-                .select('*, users (full_name), branches (id, name), groups (id, name, center_id)'),
+                .select(BORROWER_LIST_SELECT)
+                .eq('status', BORROWER_ACTIVE_LOAN_STATUS)
+                .order('first_name'),
             supabase.from('centers').select('id, name, branch_id'),
             supabase.from('groups').select('*'),
         ]);
@@ -70,14 +80,66 @@ const AdminBorrowerManagement = () => {
         fetchData();
     }, [fetchData]);
 
+    useEffect(() => {
+        const q = searchQuery.trim();
+        const statusNeedsLoad =
+            statusFilter === 'eligible' ||
+            statusFilter === 'defaulted' ||
+            statusFilter === 'paid_up' ||
+            statusFilter === 'active';
+
+        let cancelled = false;
+
+        const load = async () => {
+            try {
+                const bySearch =
+                    q.length >= 2 ? await fetchNonActiveBorrowersByNameOrId(supabase, { searchQuery: q }) : [];
+
+                let byStatus = [];
+                if (statusNeedsLoad) {
+                    const { data, error } = await supabase
+                        .from('borrowers')
+                        .select(BORROWER_LIST_SELECT)
+                        .eq('status', statusFilter)
+                        .order('first_name')
+                        .limit(500);
+                    if (error) throw error;
+                    byStatus = data || [];
+                }
+
+                const map = new Map();
+                for (const b of [...bySearch, ...byStatus]) {
+                    if (b?.id) map.set(b.id, b);
+                }
+                if (!cancelled) setSearchExtraBorrowers([...map.values()]);
+            } catch (e) {
+                console.error(e);
+                if (!cancelled) setSearchExtraBorrowers([]);
+            }
+        };
+
+        const t = setTimeout(load, q.length >= 2 ? 300 : 0);
+        return () => {
+            cancelled = true;
+            clearTimeout(t);
+        };
+    }, [searchQuery, statusFilter]);
+
+    const allBorrowersForFilters = useMemo(() => {
+        const byId = new Map();
+        for (const b of borrowers) byId.set(b.id, b);
+        for (const b of searchExtraBorrowers) byId.set(b.id, b);
+        return [...byId.values()];
+    }, [borrowers, searchExtraBorrowers]);
+
     const branchOptions = useMemo(() => {
         const m = new Map();
-        for (const b of borrowers) {
+        for (const b of allBorrowersForFilters) {
             const br = b.branches;
             if (br?.id) m.set(br.id, br.name);
         }
         return [...m.entries()].sort((a, b) => a[1].localeCompare(b[1]));
-    }, [borrowers]);
+    }, [allBorrowersForFilters]);
 
     const centersInSelect = useMemo(
         () => adminCentersForSelect(centers, branchFilter),
@@ -107,25 +169,31 @@ const AdminBorrowerManagement = () => {
     }, [centerFilter, groupFilter, groupsInSelect]);
 
     const filteredBorrowers = useMemo(() => {
-        return borrowers.filter(b => {
-            const query = searchQuery.toLowerCase();
-            const matchesSearch =
-                b.first_name.toLowerCase().includes(query) ||
-                b.surname.toLowerCase().includes(query) ||
-                (b.borrower_id && b.borrower_id.toLowerCase().includes(query)) ||
-                (b.phone_number && b.phone_number.includes(query)) ||
-                (b.users?.full_name && b.users.full_name.toLowerCase().includes(query)) ||
-                (b.branches?.name && b.branches.name.toLowerCase().includes(query)) ||
-                (b.groups?.name && b.groups.name.toLowerCase().includes(query));
-            const matchesStatus = statusFilter === 'all' || b.status === statusFilter;
+        return allBorrowersForFilters.filter((b) => {
+            if (!shouldIncludeBorrowerByStatusAndSearch(b, { searchQuery, statusFilter })) {
+                return false;
+            }
+            const matchesSearch = borrowerMatchesGeneralSearch(b, searchQuery, [
+                b.users?.full_name,
+                b.branches?.name,
+                b.groups?.name,
+            ]);
             const matchesBranch =
                 branchFilter === 'all' || (b.branches?.id && b.branches.id === branchFilter);
             const cId = resolveBorrowerCenterId(b, groups);
             const matchesCenter = centerFilter === 'all' || cId === centerFilter;
             const matchesGroup = groupFilter === 'all' || b.group_id === groupFilter;
-            return matchesSearch && matchesStatus && matchesBranch && matchesCenter && matchesGroup;
+            return matchesSearch && matchesBranch && matchesCenter && matchesGroup;
         });
-    }, [borrowers, groups, searchQuery, statusFilter, branchFilter, centerFilter, groupFilter]);
+    }, [
+        allBorrowersForFilters,
+        groups,
+        searchQuery,
+        statusFilter,
+        branchFilter,
+        centerFilter,
+        groupFilter,
+    ]);
 
     const totalPages = useMemo(
         () => getTotalPages(filteredBorrowers.length, DEFAULT_TABLE_PAGE_SIZE),
@@ -202,7 +270,7 @@ const AdminBorrowerManagement = () => {
                         <CardTitle>All System Borrowers ({filteredBorrowers.length})</CardTitle>
                         <div className="flex flex-wrap items-center gap-2">
                             <Input
-                                placeholder="Search: name, ID, phone, officer, branch…"
+                                placeholder="Search name or borrower ID (eligible / paid-up appear here)…"
                                 value={searchQuery}
                                 onChange={(e) => setSearchQuery(e.target.value)}
                                 className="min-w-[200px] flex-1 md:max-w-md"
@@ -251,12 +319,12 @@ const AdminBorrowerManagement = () => {
                                     <SelectValue placeholder="Status" />
                                 </SelectTrigger>
                                 <SelectContent>
-                                    <SelectItem value="all">All statuses</SelectItem>
+                                    <SelectItem value="active_loan">Active Loan</SelectItem>
                                     <SelectItem value="eligible">Eligible</SelectItem>
                                     <SelectItem value="active">Active</SelectItem>
-                                    <SelectItem value="active_loan">Active Loan</SelectItem>
                                     <SelectItem value="defaulted">Defaulted</SelectItem>
                                     <SelectItem value="paid_up">Paid Up</SelectItem>
+                                    <SelectItem value="all">All (search for non-active)</SelectItem>
                                 </SelectContent>
                             </Select>
                         </div>
