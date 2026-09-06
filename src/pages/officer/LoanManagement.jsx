@@ -25,6 +25,11 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { BorrowerSearchSelect } from '@/components/BorrowerSearchSelect';
 import { statCardIconWellClass } from '@/lib/utils';
 import { shouldIncludeLoanByStatusAndSearch } from '@/lib/loanListFilters';
+import {
+    LOAN_OPEN_STATUSES,
+    LOAN_LIST_SELECT,
+    fetchPaidLoansByNameOrLoanId,
+} from '@/lib/loanListQuery';
 
 const EAT_TIMEZONE = 'Africa/Nairobi';
 const LOAN_PAGE_SIZE = 10;
@@ -59,6 +64,7 @@ const LoanManagement = () => {
     const { user } = useAuth();
     const { toast } = useToast();
     const [loans, setLoans] = useState([]);
+    const [paidSearchLoans, setPaidSearchLoans] = useState([]);
     const [borrowers, setBorrowers] = useState([]);
     const [loanProducts, setLoanProducts] = useState([]);
     const [holidays, setHolidays] = useState([]);
@@ -121,71 +127,98 @@ const LoanManagement = () => {
         if (!user) return;
         setLoading(true);
 
-        await supabase.rpc('update_all_loan_statuses');
+        // Do not block the list on a full-book status sweep.
+        void supabase.rpc('update_all_loan_statuses');
 
-        const { data: config } = await supabase.from('system_config').select('value').eq('key', 'currency').single();
-        if (config) setCurrency(config.value);
+        try {
+            const [
+                configRes,
+                profileRes,
+                centersRes,
+                groupsRes,
+                loansRes,
+                borrowersRes,
+                productsRes,
+                holidaysRes,
+            ] = await Promise.all([
+                supabase.from('system_config').select('value').eq('key', 'currency').single(),
+                supabase.from('users').select('branch_id').eq('id', user.id).maybeSingle(),
+                supabase
+                    .from('centers')
+                    .select('id, name, branch_id')
+                    .eq('loan_officer_id', user.id)
+                    .order('name'),
+                supabase.from('groups').select('*').eq('loan_officer_id', user.id),
+                supabase
+                    .from('loans')
+                    .select(LOAN_LIST_SELECT)
+                    .eq('officer_id', user.id)
+                    .in('status', LOAN_OPEN_STATUSES)
+                    .order('disbursement_date', { ascending: false }),
+                supabase.from('borrowers').select('*').eq('loan_officer_id', user.id),
+                supabase.from('loan_products').select('*').eq('status', 'active'),
+                supabase.from('holidays').select('*'),
+            ]);
 
-        const { data: profileRow } = await supabase.from('users').select('branch_id').eq('id', user.id).maybeSingle();
-        const branchId = profileRow?.branch_id ?? null;
+            const branchId = profileRes.data?.branch_id ?? null;
+            let centersData = centersRes.data || [];
+            if (branchId) {
+                centersData = centersData.filter((c) => c.branch_id === branchId);
+            }
 
-        let centersQuery = supabase
-            .from('centers')
-            .select('id, name, branch_id')
-            .eq('loan_officer_id', user.id)
-            .order('name');
-        if (branchId) {
-            centersQuery = centersQuery.eq('branch_id', branchId);
+            const err =
+                loansRes.error ||
+                borrowersRes.error ||
+                productsRes.error ||
+                holidaysRes.error ||
+                centersRes.error ||
+                groupsRes.error;
+            if (err) {
+                toast({ title: 'Error fetching data', description: err.message, variant: 'destructive' });
+            } else {
+                if (configRes.data) setCurrency(configRes.data.value);
+                setLoans(loansRes.data || []);
+                setBorrowers(borrowersRes.data || []);
+                setLoanProducts(productsRes.data || []);
+                setHolidays(holidaysRes.data || []);
+                setCenters(centersData);
+                setGroups(groupsRes.data || []);
+            }
+        } finally {
+            setLoading(false);
         }
-        const { data: centersData, error: centersError } = await centersQuery;
-        const { data: groupsData, error: groupsError } = await supabase
-            .from('groups')
-            .select('*')
-            .eq('loan_officer_id', user.id);
-
-        const { data: loansData, error: loansError } = await supabase
-            .from('loans')
-            .select(
-                `*, borrowers ( id, first_name, surname, group_id, center_id, borrower_id, phone_number, borrower_type )`
-            )
-            .eq('officer_id', user.id);
-        const { data: borrowersData, error: borrowersError } = await supabase.from('borrowers').select('*').eq('loan_officer_id', user.id);
-        const { data: productsData, error: productsError } = await supabase.from('loan_products').select('*').eq('status', 'active');
-        const { data: holidaysData, error: holidaysError } = await supabase.from('holidays').select('*');
-        
-        if (
-            loansError ||
-            borrowersError ||
-            productsError ||
-            holidaysError ||
-            centersError ||
-            groupsError
-        ) {
-            toast({
-                title: 'Error fetching data',
-                description:
-                    loansError?.message ||
-                    borrowersError?.message ||
-                    productsError?.message ||
-                    holidaysError?.message ||
-                    centersError?.message ||
-                    groupsError?.message,
-                variant: 'destructive',
-            });
-        } else {
-            setLoans(loansData || []);
-            setBorrowers(borrowersData || []);
-            setLoanProducts(productsData || []);
-            setHolidays(holidaysData || []);
-            setCenters(centersData || []);
-            setGroups(groupsData || []);
-        }
-        setLoading(false);
     }, [user, toast]);
 
     useEffect(() => {
         fetchData();
     }, [fetchData]);
+
+    useEffect(() => {
+        if (!user) return;
+        const q = searchQuery.trim();
+        if (q.length < 2) {
+            setPaidSearchLoans([]);
+            return;
+        }
+        let cancelled = false;
+        const t = setTimeout(async () => {
+            try {
+                const paid = await fetchPaidLoansByNameOrLoanId(supabase, {
+                    searchQuery: q,
+                    select: LOAN_LIST_SELECT,
+                    officerId: user.id,
+                });
+                if (!cancelled) setPaidSearchLoans(paid);
+            } catch (e) {
+                console.error(e);
+                if (!cancelled) setPaidSearchLoans([]);
+            }
+        }, 300);
+        return () => {
+            cancelled = true;
+            clearTimeout(t);
+        };
+    }, [searchQuery, user]);
 
     useEffect(() => {
        resetFormData();
@@ -247,7 +280,10 @@ const LoanManagement = () => {
     }, [centerFilter, groupFilter, groupsForTableFilter]);
 
     const filteredLoans = useMemo(() => {
-        return loans.filter((loan) => {
+        const byId = new Map();
+        for (const loan of loans) byId.set(loan.id, loan);
+        for (const loan of paidSearchLoans) byId.set(loan.id, loan);
+        return [...byId.values()].filter((loan) => {
             if (!shouldIncludeLoanByStatusAndSearch(loan, { searchQuery, statusFilter })) {
                 return false;
             }
@@ -273,6 +309,7 @@ const LoanManagement = () => {
         });
     }, [
         loans,
+        paidSearchLoans,
         searchQuery,
         statusFilter,
         productFilter,
@@ -283,10 +320,11 @@ const LoanManagement = () => {
     ]);
 
     const stats = useMemo(() => {
-        const totalLoans = loans.length;
-        const totalPrincipal = loans.reduce((sum, l) => sum + Number(l.principal), 0);
-        const totalBalance = loans.reduce((sum, l) => sum + Number(l.balance), 0);
-        const atRiskLoans = loans.filter((l) => ['delinquent', 'defaulted'].includes(l.status)).length;
+        const open = loans;
+        const totalLoans = open.length;
+        const totalPrincipal = open.reduce((sum, l) => sum + Number(l.principal), 0);
+        const totalBalance = open.reduce((sum, l) => sum + Number(l.balance), 0);
+        const atRiskLoans = open.filter((l) => ['delinquent', 'defaulted'].includes(l.status)).length;
         return { totalLoans, totalPrincipal, totalBalance, atRiskLoans };
     }, [loans]);
 
@@ -582,8 +620,7 @@ const LoanManagement = () => {
         setIsRefreshingSchedule(true);
         try {
             await supabase.rpc('recalculate_loan_schedule', { p_loan_id: loan.id });
-            await supabase.rpc('update_all_loan_statuses');
-            
+
             const { data: latestLoanData, error } = await supabase
                 .from('loans')
                 .select(

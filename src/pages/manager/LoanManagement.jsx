@@ -20,6 +20,11 @@ import { statCardIconWellClass } from '@/lib/utils';
 import { getManagerBranchId } from '@/lib/managerBranch';
 import { shouldIncludeLoanByStatusAndSearch } from '@/lib/loanListFilters';
 import {
+    LOAN_OPEN_STATUSES,
+    LOAN_LIST_SELECT_WITH_OFFICER,
+    fetchPaidLoansByNameOrLoanId,
+} from '@/lib/loanListQuery';
+import {
     excelEmptyStateCellClassName,
     excelTableClassName,
     excelTableRowClassName,
@@ -49,7 +54,9 @@ const ManagerLoanManagement = () => {
     const { user } = useAuth();
     const { toast } = useToast();
     const [loans, setLoans] = useState([]);
+    const [paidSearchLoans, setPaidSearchLoans] = useState([]);
     const [officers, setOfficers] = useState([]);
+    const [branchIdScope, setBranchIdScope] = useState(null);
     const [loanProducts, setLoanProducts] = useState([]);
     const [borrowers, setBorrowers] = useState([]);
     const [centers, setCenters] = useState([]);
@@ -74,82 +81,107 @@ const ManagerLoanManagement = () => {
         if (!user) return;
         const branchId = await getManagerBranchId(user);
         if (!branchId) return;
+        setBranchIdScope(branchId);
         setLoading(true);
 
-        const { data: config } = await supabase.from('system_config').select('value').eq('key', 'currency').single();
-        if (config) setCurrency(config.value);
+        try {
+            const { data: officersData, error: officersError } = await supabase
+                .from('users')
+                .select('id, full_name')
+                .eq('branch_id', branchId)
+                .eq('role', 'officer');
 
-        const { data: officersData, error: officersError } = await supabase
-            .from('users')
-            .select('id, full_name')
-            .eq('branch_id', branchId)
-            .eq('role', 'officer');
-            
-        if (officersError) {
-             toast({ title: 'Error fetching officers', description: officersError.message, variant: 'destructive' });
-             setLoading(false);
-             return;
-        }
-        setOfficers(officersData || []);
-        
-        const officerIds = officersData.map(o => o.id);
+            if (officersError) {
+                toast({ title: 'Error fetching officers', description: officersError.message, variant: 'destructive' });
+                return;
+            }
+            setOfficers(officersData || []);
+            const officerIds = (officersData || []).map((o) => o.id);
 
-        if (officerIds.length === 0) {
-            setLoans([]);
+            if (officerIds.length === 0) {
+                setLoans([]);
+                setLoanProducts([]);
+                setBorrowers([]);
+                setCenters([]);
+                setGroups([]);
+                return;
+            }
+
+            const [configRes, loansRes, productsRes, centersRes, groupsRes, borrowersRes] = await Promise.all([
+                supabase.from('system_config').select('value').eq('key', 'currency').single(),
+                supabase
+                    .from('loans')
+                    .select(LOAN_LIST_SELECT_WITH_OFFICER)
+                    .in('officer_id', officerIds)
+                    .in('status', LOAN_OPEN_STATUSES)
+                    .order('disbursement_date', { ascending: false }),
+                supabase.from('loan_products').select('*').eq('status', 'active'),
+                supabase
+                    .from('centers')
+                    .select('id, name, branch_id, loan_officer_id')
+                    .eq('branch_id', branchId)
+                    .order('name'),
+                supabase.from('groups').select('*').in('loan_officer_id', officerIds),
+                supabase
+                    .from('borrowers')
+                    .select('id, first_name, surname, borrower_id, phone_number')
+                    .eq('branch_id', branchId),
+            ]);
+
+            if (configRes.data) setCurrency(configRes.data.value);
+
+            const err =
+                loansRes.error ||
+                productsRes.error ||
+                borrowersRes.error ||
+                centersRes.error ||
+                groupsRes.error;
+            if (err) {
+                toast({ title: 'Error fetching data', description: err.message, variant: 'destructive' });
+            } else {
+                setLoans(loansRes.data || []);
+                setLoanProducts(productsRes.data || []);
+                setBorrowers(borrowersRes.data || []);
+                setCenters(centersRes.data || []);
+                setGroups(groupsRes.data || []);
+            }
+        } finally {
             setLoading(false);
-            return;
         }
-
-        const { data: loansData, error: loansError } = await supabase
-            .from('loans')
-            .select(
-                `*, borrowers ( id, first_name, surname, group_id, center_id, borrower_id, phone_number ), officer:users!officer_id ( full_name )`,
-            )
-            .in('officer_id', officerIds);
-
-        const { data: productsData, error: productsError } = await supabase
-            .from('loan_products')
-            .select('*')
-            .eq('status', 'active');
-
-        const { data: centersData, error: centersError } = await supabase
-            .from('centers')
-            .select('id, name, branch_id, loan_officer_id')
-            .eq('branch_id', branchId)
-            .order('name');
-
-        const { data: groupsData, error: groupsError } = await supabase.from('groups').select('*').in('loan_officer_id', officerIds);
-
-        // Fetch Borrowers for Filter
-        const { data: borrowersData, error: borrowersError } = await supabase
-            .from('borrowers')
-            .select('id, first_name, surname, borrower_id, phone_number')
-            .eq('branch_id', branchId);
-
-        if (loansError || productsError || borrowersError || centersError || groupsError) {
-            toast({
-                title: 'Error fetching data',
-                description:
-                    loansError?.message ||
-                    productsError?.message ||
-                    borrowersError?.message ||
-                    centersError?.message ||
-                    groupsError?.message,
-                variant: 'destructive',
-            });
-        } else {
-            setLoans(loansData || []);
-            setLoanProducts(productsData || []);
-            setBorrowers(borrowersData || []);
-            setCenters(centersData || []);
-            setGroups(groupsData || []);
-        }
-        setLoading(false);
     }, [user, toast]);
 
     useEffect(() => {
         fetchData();
     }, [fetchData]);
+
+    useEffect(() => {
+        if (!user || !branchIdScope || officers.length === 0) return;
+        const q = searchQuery.trim();
+        if (q.length < 2) {
+            setPaidSearchLoans([]);
+            return;
+        }
+        const officerIds = officers.map((o) => o.id);
+        let cancelled = false;
+        const t = setTimeout(async () => {
+            try {
+                const paid = await fetchPaidLoansByNameOrLoanId(supabase, {
+                    searchQuery: q,
+                    select: LOAN_LIST_SELECT_WITH_OFFICER,
+                    officerIds,
+                    branchId: branchIdScope,
+                });
+                if (!cancelled) setPaidSearchLoans(paid);
+            } catch (e) {
+                console.error(e);
+                if (!cancelled) setPaidSearchLoans([]);
+            }
+        }, 300);
+        return () => {
+            cancelled = true;
+            clearTimeout(t);
+        };
+    }, [searchQuery, user, branchIdScope, officers]);
 
     const centersForSelectedOfficer = useMemo(() => {
         if (officerFilter === 'all') return [];
@@ -206,7 +238,10 @@ const ManagerLoanManagement = () => {
     }, [centerFilter, groupFilter, groupsForTableFilter]);
 
     const filteredLoans = useMemo(() => {
-        return loans.filter((loan) => {
+        const byId = new Map();
+        for (const loan of loans) byId.set(loan.id, loan);
+        for (const loan of paidSearchLoans) byId.set(loan.id, loan);
+        return [...byId.values()].filter((loan) => {
             if (!shouldIncludeLoanByStatusAndSearch(loan, { searchQuery, statusFilter })) {
                 return false;
             }
@@ -241,6 +276,7 @@ const ManagerLoanManagement = () => {
         });
     }, [
         loans,
+        paidSearchLoans,
         searchQuery,
         statusFilter,
         productFilter,
@@ -281,8 +317,7 @@ const ManagerLoanManagement = () => {
         setIsRefreshingSchedule(true);
         try {
             await supabase.rpc('recalculate_loan_schedule', { p_loan_id: loan.id });
-            await supabase.rpc('update_all_loan_statuses');
-            
+
             const { data: latestLoanData, error } = await supabase
                 .from('loans')
                 .select(`*, borrowers (id, first_name, surname)`)
@@ -303,7 +338,16 @@ const ManagerLoanManagement = () => {
 
     const getStatusBadge = (status) => ({ active: 'success', paid: 'default', delinquent: 'warning', defaulted: 'destructive', delete_requested: 'secondary', edit_requested: 'secondary' }[status] || 'secondary');
     
-    if (loading) return <DashboardLayout title="Branch Loans"><div className="flex items-center justify-center h-full">Loading...</div></DashboardLayout>;
+    if (loading) {
+        return (
+            <DashboardLayout title="Branch Loans">
+                <div className="flex items-center justify-center h-48 gap-2 text-muted-foreground">
+                    <Loader2 className="h-6 w-6 animate-spin" />
+                    Loading open loans…
+                </div>
+            </DashboardLayout>
+        );
+    }
 
     return (
         <DashboardLayout title="Branch Loans">
