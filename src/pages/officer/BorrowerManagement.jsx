@@ -1885,7 +1885,7 @@ const BorrowerManagement = () => {
                                         <SelectValue placeholder="Status" />
                                     </SelectTrigger>
                                     <SelectContent>
-                                        <SelectItem value="active_loan">Active Loan</SelectItem>
+                                        <SelectItem value="active_loan">With active loan</SelectItem>
                                         <SelectItem value="eligible">Eligible</SelectItem>
                                         <SelectItem value="defaulted">Defaulted</SelectItem>
                                         <SelectItem value="paid_up">Paid Up</SelectItem>
