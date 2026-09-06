@@ -232,7 +232,6 @@ const UserManagement = () => {
       });
 
       const token_hash = typeof data?.token_hash === 'string' ? data.token_hash : null;
-      const targetEmail = typeof data?.email === 'string' ? data.email : row.email;
 
       if (invokeError || !token_hash) {
         let serverMsg = invokeError?.message || 'Edge function failed.';
@@ -253,15 +252,15 @@ const UserManagement = () => {
         return;
       }
 
-      let voErr = null;
-      const otpPayload = { token_hash, type: 'magiclink' };
-      if (targetEmail) otpPayload.email = targetEmail;
-      ({ error: voErr } = await supabase.auth.verifyOtp(otpPayload));
+      // Supabase JS requires only token_hash + type when verifying hashed magic-link tokens.
+      let { error: voErr } = await supabase.auth.verifyOtp({
+        token_hash,
+        type: 'magiclink',
+      });
       if (voErr) {
         ({ error: voErr } = await supabase.auth.verifyOtp({
           token_hash,
           type: 'email',
-          ...(targetEmail ? { email: targetEmail } : {}),
         }));
       }
       if (voErr) {
