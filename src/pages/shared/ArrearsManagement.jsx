@@ -15,6 +15,7 @@ import { Loader2, Coins, Search, ChevronLeft, ChevronRight } from 'lucide-react'
 import DashboardLayout from '@/components/layout/DashboardLayout';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { getManagerBranchId } from '@/lib/managerBranch';
+import { useDate } from '@/contexts/DateContext';
 
 const EAT_TIMEZONE = 'Africa/Nairobi';
 const ARREARS_PAGE_SIZE = 10;
