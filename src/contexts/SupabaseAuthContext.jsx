@@ -3,6 +3,7 @@ import { supabase } from '@/lib/customSupabaseClient';
 import { useToast } from '@/components/ui/use-toast';
 import { logAudit } from '@/lib/auditLog';
 import { clearAdminImpersonationBackup } from '@/lib/adminImpersonation';
+import { SUBSCRIPTION_LOCKED } from '@/lib/subscriptionLock';
 
 const AuthContext = createContext(undefined);
 
@@ -65,8 +66,10 @@ export const AuthProvider = ({ children }) => {
                 await clearAuthState();
              }
           }
-        } else {
-          if (mounted) {
+        } else if (mounted) {
+          if (SUBSCRIPTION_LOCKED && initialSession) {
+            await clearAuthState();
+          } else {
             handleSession(initialSession);
           }
         }
@@ -106,6 +109,10 @@ export const AuthProvider = ({ children }) => {
             });
           }
         } else if (event === 'SIGNED_IN') {
+          if (SUBSCRIPTION_LOCKED) {
+            await clearAuthState();
+            return;
+          }
           handleSession(newSession);
           void logAudit(
             {
@@ -117,6 +124,10 @@ export const AuthProvider = ({ children }) => {
         } else if (event === 'USER_UPDATED') {
           handleSession(newSession);
         } else if (event === 'INITIAL_SESSION') {
+          if (SUBSCRIPTION_LOCKED && newSession) {
+            await clearAuthState();
+            return;
+          }
           handleSession(newSession);
         }
       }
@@ -157,6 +168,9 @@ export const AuthProvider = ({ children }) => {
   }, [toast]);
 
   const signIn = useCallback(async (email, password) => {
+    if (SUBSCRIPTION_LOCKED) {
+      return { error: new Error('Access is suspended until your subscription invoice is settled.') };
+    }
     try {
       const { data, error } = await supabase.auth.signInWithPassword({
         email,

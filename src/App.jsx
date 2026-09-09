@@ -1,6 +1,7 @@
-import React, { lazy, Suspense } from 'react';
+import React, { lazy, Suspense, useEffect } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
+import { SUBSCRIPTION_LOCKED } from '@/lib/subscriptionLock';
 import Login from '@/pages/Login';
 import AdminSignup from '@/pages/AdminSignup';
 import AdminDashboard from '@/pages/admin/Dashboard';
@@ -44,11 +45,25 @@ const routeLoading = (
   </div>
 );
 
+const SubscriptionLockedRedirect = () => {
+  const { signOut } = useAuth();
+
+  useEffect(() => {
+    void signOut();
+  }, [signOut]);
+
+  return <Navigate to="/login" replace />;
+};
+
 const ProtectedRoute = ({ children, allowedRoles }) => {
   const { user, loading } = useAuth();
   
   if (loading) {
     return <div className="flex items-center justify-center min-h-screen">Loading...</div>;
+  }
+
+  if (SUBSCRIPTION_LOCKED) {
+    return <SubscriptionLockedRedirect />;
   }
   
   if (!user) {
@@ -71,6 +86,10 @@ const DashboardRedirect = () => {
   if (loading) {
     return <div className="flex items-center justify-center min-h-screen">Loading...</div>;
   }
+
+  if (SUBSCRIPTION_LOCKED) {
+    return <SubscriptionLockedRedirect />;
+  }
   
   if (!user) {
     return <Navigate to="/login" replace />;
@@ -92,7 +111,10 @@ function App() {
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
-      <Route path="/admin-signup" element={<AdminSignup />} />
+      <Route
+        path="/admin-signup"
+        element={SUBSCRIPTION_LOCKED ? <Navigate to="/login" replace /> : <AdminSignup />}
+      />
       <Route path="/" element={<DashboardRedirect />} />
       
       {/* Admin Routes */}

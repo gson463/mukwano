@@ -11,6 +11,12 @@ import { useToast } from '@/components/ui/use-toast';
 import { format } from 'date-fns';
 import { cn } from '@/lib/utils';
 import { DEFAULT_ORG_NAME, fetchSystemConfig, getBrandLogoUrl } from '@/lib/systemConfig';
+import {
+  SUBSCRIPTION_LOCKED,
+  SUBSCRIPTION_LOCK_DETAIL,
+  SUBSCRIPTION_LOCK_MESSAGE,
+  SUBSCRIPTION_LOCK_STATUS_SHORT,
+} from '@/lib/subscriptionLock';
 import { SystemBrandLogo } from '@/components/SystemBrandLogo';
 import {
   Loader2,
@@ -25,6 +31,7 @@ import {
   RefreshCw,
   LockKeyhole,
   MessageCircle,
+  AlertCircle,
 } from 'lucide-react';
 
 const MotionButton = motion(Button);
@@ -68,7 +75,7 @@ export default function Login() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [now, setNow] = useState(() => new Date());
   const [insightIndex, setInsightIndex] = useState(0);
-  const { signIn, user, loading: authLoading } = useAuth();
+  const { signIn, signOut, user, loading: authLoading } = useAuth();
   const navigate = useNavigate();
   const { toast } = useToast();
   const [systemConfig, setSystemConfig] = useState({ name: DEFAULT_ORG_NAME, logoUrl: null });
@@ -122,6 +129,13 @@ export default function Login() {
   }, [useMotion]);
 
   useEffect(() => {
+    if (SUBSCRIPTION_LOCKED && user) {
+      void signOut();
+    }
+  }, [user, signOut]);
+
+  useEffect(() => {
+    if (SUBSCRIPTION_LOCKED) return;
     if (!authLoading && user) {
       const role = user.user_metadata?.role;
       if (role) {
@@ -147,6 +161,7 @@ export default function Login() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (SUBSCRIPTION_LOCKED) return;
     if (rememberMe) {
       localStorage.setItem('mukwano_login_email', email.trim());
     } else {
@@ -205,15 +220,22 @@ export default function Login() {
         <main className="order-1 flex flex-col justify-center px-4 py-10 sm:px-8 lg:order-2 lg:px-12 xl:px-20">
           <div className="mx-auto w-full max-w-md">
             <div className="mb-6 flex flex-col items-center justify-end gap-2 sm:flex-row sm:justify-end">
-              <div className="inline-flex items-center gap-2 rounded-full border border-emerald-200/80 bg-white/90 px-3 py-1.5 text-xs font-medium text-emerald-800 shadow-sm backdrop-blur">
-                <span className="relative flex h-2 w-2">
-                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60" />
-                  <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
-                </span>
-                System online
-                <span className="text-muted-foreground">·</span>
-                <time dateTime={format(now, 'yyyy-MM-dd')}>{format(now, 'EEE, d MMM yyyy')}</time>
-              </div>
+              {SUBSCRIPTION_LOCKED ? (
+                <div className="inline-flex max-w-full items-center gap-2 rounded-full border border-amber-200/80 bg-white/90 px-3 py-1.5 text-xs font-medium text-amber-900 shadow-sm backdrop-blur">
+                  <AlertCircle className="h-3.5 w-3.5 shrink-0 text-amber-600" aria-hidden />
+                  <span className="truncate">{SUBSCRIPTION_LOCK_STATUS_SHORT}</span>
+                </div>
+              ) : (
+                <div className="inline-flex items-center gap-2 rounded-full border border-emerald-200/80 bg-white/90 px-3 py-1.5 text-xs font-medium text-emerald-800 shadow-sm backdrop-blur">
+                  <span className="relative flex h-2 w-2">
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60" />
+                    <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
+                  </span>
+                  System online
+                  <span className="text-muted-foreground">·</span>
+                  <time dateTime={format(now, 'yyyy-MM-dd')}>{format(now, 'EEE, d MMM yyyy')}</time>
+                </div>
+              )}
             </div>
 
             <div className="relative rounded-2xl border border-slate-200/80 bg-white/95 p-6 shadow-[0_24px_64px_-16px_rgba(15,23,42,0.18)] backdrop-blur-sm sm:p-8">
@@ -239,6 +261,19 @@ export default function Login() {
                 <p className="mt-1 text-sm text-slate-500">Use the email your administrator gave you.</p>
               </div>
 
+              {SUBSCRIPTION_LOCKED && (
+                <div
+                  role="alert"
+                  className="mb-5 flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50/90 p-4 text-amber-950"
+                >
+                  <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" aria-hidden />
+                  <div>
+                    <p className="text-sm font-semibold">{SUBSCRIPTION_LOCK_MESSAGE}</p>
+                    <p className="mt-1 text-xs text-amber-800/90">{SUBSCRIPTION_LOCK_DETAIL}</p>
+                  </div>
+                </div>
+              )}
+
               <motion.form
                 onSubmit={handleSubmit}
                 className="space-y-4"
@@ -260,6 +295,7 @@ export default function Login() {
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
                       className="h-11 border-slate-200 bg-slate-50/90 pl-10 pr-10 focus-visible:border-primary"
+                      disabled={SUBSCRIPTION_LOCKED}
                       required
                     />
                     {emailLooksValid(email) && (
@@ -282,12 +318,14 @@ export default function Login() {
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
                       className="h-11 border-slate-200 bg-slate-50/90 pl-10 pr-10 focus-visible:border-primary"
+                      disabled={SUBSCRIPTION_LOCKED}
                       required
                     />
                     <button
                       type="button"
                       onClick={() => setShowPassword((p) => !p)}
-                      className="absolute right-0 top-0 flex h-11 w-11 items-center justify-center text-slate-400 hover:text-slate-700"
+                      disabled={SUBSCRIPTION_LOCKED}
+                      className="absolute right-0 top-0 flex h-11 w-11 items-center justify-center text-slate-400 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
                       aria-label={showPassword ? 'Hide password' : 'Show password'}
                     >
                       {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
@@ -301,6 +339,7 @@ export default function Login() {
                       id="remember"
                       checked={rememberMe}
                       onCheckedChange={(c) => setRememberMe(!!c)}
+                      disabled={SUBSCRIPTION_LOCKED}
                     />
                     <label htmlFor="remember" className="text-sm text-slate-600">
                       Remember me
@@ -309,7 +348,8 @@ export default function Login() {
                   <button
                     type="button"
                     onClick={handleForgot}
-                    className="text-sm font-medium text-primary hover:underline"
+                    disabled={SUBSCRIPTION_LOCKED}
+                    className="text-sm font-medium text-primary hover:underline disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     Forgot password?
                   </button>
@@ -318,7 +358,7 @@ export default function Login() {
                 <MotionButton
                   type="submit"
                   variant="ghost"
-                  disabled={isSubmitting}
+                  disabled={isSubmitting || SUBSCRIPTION_LOCKED}
                   className="group relative h-12 w-full overflow-hidden rounded-xl border-0 bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-800 text-base font-semibold !text-white shadow-lg hover:!bg-gradient-to-r hover:from-emerald-500 hover:via-teal-500 hover:to-emerald-700 hover:!text-white"
                   whileHover={useMotion && !isSubmitting ? { y: -1, scale: 1.005 } : undefined}
                   whileTap={useMotion && !isSubmitting ? { scale: 0.99 } : undefined}
@@ -359,8 +399,8 @@ export default function Login() {
                 Role-based
               </span>
               <span className="inline-flex items-center gap-1.5">
-                <RefreshCw className="h-3.5 w-3.5 text-emerald-600" />
-                Live sync
+                <RefreshCw className={cn('h-3.5 w-3.5', SUBSCRIPTION_LOCKED ? 'text-amber-600' : 'text-emerald-600')} />
+                {SUBSCRIPTION_LOCKED ? 'Sync paused' : 'Live sync'}
               </span>
             </div>
 
@@ -477,16 +517,18 @@ export default function Login() {
 
           <div className="relative z-10 flex flex-wrap gap-2">
             {[
-              { t: 'Portfolio', s: 'Loans' },
-              { t: 'Live', s: 'Sync' },
-              { t: 'Secure', s: 'Access' },
-            ].map(({ t, s }) => (
+              { t: 'Portfolio', s: 'Loans', accent: 'text-emerald-300/80' },
+              SUBSCRIPTION_LOCKED
+                ? { t: 'Offline', s: 'Billing', accent: 'text-amber-300/80' }
+                : { t: 'Live', s: 'Sync', accent: 'text-emerald-300/80' },
+              { t: 'Secure', s: 'Access', accent: 'text-emerald-300/80' },
+            ].map(({ t, s, accent }) => (
               <div
                 key={t + s}
                 className="flex min-w-0 flex-1 basis-[7rem] flex-col rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-center shadow-sm backdrop-blur-sm"
               >
                 <span className="text-xs font-bold text-white/95">{t}</span>
-                <span className="text-[0.6rem] font-semibold uppercase tracking-wider text-emerald-300/80">
+                <span className={cn('text-[0.6rem] font-semibold uppercase tracking-wider', accent)}>
                   {s}
                 </span>
               </div>
