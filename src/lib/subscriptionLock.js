@@ -1,6 +1,6 @@
 /** When true, login is blocked and the subscription paywall message is shown. */
 export const SUBSCRIPTION_LOCKED =
-  import.meta.env.VITE_SUBSCRIPTION_LOCKED !== 'false';
+  import.meta.env.VITE_SUBSCRIPTION_LOCKED === 'true';
 
 export const SUBSCRIPTION_LOCK_MESSAGE =
   'Failed to load data. Please settle your subscription invoice.';
