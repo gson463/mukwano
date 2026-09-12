@@ -13,6 +13,12 @@ import { toZonedTime } from 'date-fns-tz';
 import { getTodayDateString } from '@/utils/dateValidation';
 import { isNonWorkingDay } from '@/utils/holidayUtils';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import {
+    getInstallmentUnitFromSchedule,
+    isValidRepaymentAmount,
+    repaymentAmountValidationMessage,
+    REPAYMENT_AMOUNT_INVALID_FALLBACK,
+} from '@/lib/repaymentInstallmentUnit';
 
 const EAT_TIMEZONE = 'Africa/Nairobi';
 
@@ -129,7 +135,6 @@ const GroupRepayment = () => {
             const memberPromises = loansInGroup.map(async (loan) => {
                 let pastDueAmount = 0;
                 let amountDueToday = 0;
-                let hasAnyDueInstallment = false;
 
                 loan.schedule?.forEach((inst) => {
                     const instDueDate = toZonedTime(new Date(inst.dueDate), EAT_TIMEZONE);
@@ -140,16 +145,14 @@ const GroupRepayment = () => {
                         if (unpaidAmount > 0.01) {
                             if (isBefore(instStartOfDay, selectedD)) {
                                 pastDueAmount += unpaidAmount;
-                                hasAnyDueInstallment = true;
                             } else if (isEqual(instStartOfDay, selectedD)) {
                                 amountDueToday += unpaidAmount;
-                                hasAnyDueInstallment = true;
                             }
                         }
                     }
                 });
 
-                if (!hasAnyDueInstallment) return null;
+                if (amountDueToday <= 0.01) return null;
 
                 return {
                     borrowerId: loan.borrower_id,
@@ -158,11 +161,12 @@ const GroupRepayment = () => {
                     pastDueAmount,
                     amountDueToday,
                     totalDue: pastDueAmount + amountDueToday,
+                    installmentUnit: getInstallmentUnitFromSchedule(loan.schedule),
                 };
             });
 
             const membersWithDueInstallments = (await Promise.all(memberPromises)).filter(
-                (m) => m && m.totalDue > 0,
+                (m) => m && m.amountDueToday > 0.01,
             );
 
             setGroupMembers(membersWithDueInstallments);
@@ -218,15 +222,15 @@ const GroupRepayment = () => {
         const newAmounts = { ...repaymentAmounts };
         let count = 0;
         groupMembers.forEach((member) => {
-            if (member.totalDue > 0) {
-                newAmounts[member.borrowerId] = member.totalDue.toString();
+            if (member.amountDueToday > 0) {
+                newAmounts[member.borrowerId] = member.amountDueToday.toString();
                 count++;
             }
         });
         setRepaymentAmounts(newAmounts);
         toast({
             title: 'Bulk Copy Successful',
-            description: `Copied total due for ${count} members.`,
+            description: `Copied due today for ${count} members.`,
         });
     };
 
@@ -240,13 +244,47 @@ const GroupRepayment = () => {
             });
             return;
         }
+        const validationErrors = [];
+        for (const member of groupMembers) {
+            const amount = parseFloat(repaymentAmounts[member.borrowerId]);
+            if (isNaN(amount) || amount <= 0) continue;
+
+            if (amount > member.amountDueToday + 0.01) {
+                validationErrors.push(
+                    `${member.name}: Group collects today's due only (${currency} ${member.amountDueToday.toLocaleString()}). Use Repayment form for arrears or prepayment.`,
+                );
+                continue;
+            }
+
+            if (!isValidRepaymentAmount(amount, member.amountDueToday, member.installmentUnit)) {
+                const msg =
+                    repaymentAmountValidationMessage(
+                        amount,
+                        member.amountDueToday,
+                        member.installmentUnit,
+                        currency,
+                    ) || REPAYMENT_AMOUNT_INVALID_FALLBACK;
+                validationErrors.push(`${member.name}: ${msg}`);
+            }
+        }
+
+        if (validationErrors.length > 0) {
+            toast({
+                title: 'Invalid amount',
+                description:
+                    validationErrors.length === 1
+                        ? validationErrors[0]
+                        : validationErrors.join('; '),
+                variant: 'destructive',
+            });
+            return;
+        }
+
         setIsSaving(true);
         const actualPaymentDate = getTodayDateString();
 
         let successCount = 0;
         let errorCount = 0;
-        let prepaymentTotal = 0;
-        let prepaymentMembers = 0;
 
         const repaymentPromises = groupMembers.map(async (member) => {
             const amount = parseFloat(repaymentAmounts[member.borrowerId]);
@@ -255,22 +293,19 @@ const GroupRepayment = () => {
             const { data, error } = await supabase.functions.invoke('record-repayment', {
                 body: {
                     loan_id: member.loanId,
-                    amount: amount,
-                    officer_id: user.id,
+                    amount,
+                    scheduled_portion: amount,
+                    prepayment_portion: 0,
+                    wallet_split_explicit: true,
                     actual_payment_date: actualPaymentDate,
                 },
             });
 
-            if (error) {
-                console.error(`Failed to save repayment for ${member.name}:`, error);
+            if (error || data?.error) {
+                console.error(`Failed to save repayment for ${member.name}:`, error || data?.error);
                 errorCount++;
             } else {
                 successCount++;
-                const prepay = Number(data?.prepayment_amount ?? 0);
-                if (Number.isFinite(prepay) && prepay > 0) {
-                    prepaymentTotal += prepay;
-                    prepaymentMembers += 1;
-                }
             }
         });
 
@@ -278,11 +313,10 @@ const GroupRepayment = () => {
 
         if (successCount > 0) {
             const dateLabel = formatDate(parse(getTodayDateString(), 'yyyy-MM-dd', new Date()), 'PPP');
-            let description = `Recorded ${successCount} repayments for ${dateLabel}.`;
-            if (prepaymentMembers > 0) {
-                description += ` Prepayment ${prepaymentTotal.toLocaleString()} (${prepaymentMembers} member${prepaymentMembers === 1 ? '' : 's'}) counted on today's report.`;
-            }
-            toast({ title: 'Success', description });
+            toast({
+                title: 'Success',
+                description: `Recorded ${successCount} scheduled repayment${successCount === 1 ? '' : 's'} (due today) for ${dateLabel}.`,
+            });
         }
         if (errorCount > 0) {
             toast({ title: 'Errors Occurred', description: `${errorCount} repayments failed to save.`, variant: 'destructive' });
@@ -413,8 +447,10 @@ const GroupRepayment = () => {
                                         <CardDescription className="mt-1">Select a center, then a group.</CardDescription>
                                         <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
                                             Repayments are posted for{' '}
-                                            <span className="font-medium text-foreground">{"today's date (EAT) only"}</span>. Past
-                                            and future dates are not available.
+                                            <span className="font-medium text-foreground">{"today's date (EAT) only"}</span>. Group
+                                            collection is limited to{' '}
+                                            <span className="font-medium text-foreground">today&apos;s installment</span> — use
+                                            Repayment form for arrears or prepayment.
                                         </p>
                                     </div>
                                     <div
@@ -457,8 +493,9 @@ const GroupRepayment = () => {
                                     <>
                                         <div className="mb-4 flex flex-col justify-between gap-2 sm:flex-row sm:items-center">
                                             <p className="text-sm text-muted-foreground">
-                                                {selectedCenterName} · {selectedGroupName} — due amounts for{' '}
-                                                {formatDate(parse(todayYmdEAT, 'yyyy-MM-dd', new Date()), 'PPP')}.
+                                                {selectedCenterName} · {selectedGroupName} — members with an installment due{' '}
+                                                {formatDate(parse(todayYmdEAT, 'yyyy-MM-dd', new Date()), 'PPP')}. Past due is
+                                                shown for reference; only today&apos;s amount can be collected here.
                                             </p>
                                             <Button
                                                 size="sm"
@@ -467,7 +504,7 @@ const GroupRepayment = () => {
                                                 className="border-primary/30 text-primary hover:bg-primary/10"
                                             >
                                                 <ArrowDownToLine className="mr-2 h-4 w-4" />
-                                                Copy all total due
+                                                Copy all due today
                                             </Button>
                                         </div>
                                         <div className="overflow-x-auto">
@@ -495,17 +532,10 @@ const GroupRepayment = () => {
                                                                 })}
                                                             </TableCell>
                                                             <TableCell>
-                                                                {currency}{' '}
-                                                                {member.amountDueToday.toLocaleString(undefined, {
-                                                                    minimumFractionDigits: 2,
-                                                                    maximumFractionDigits: 2,
-                                                                })}
-                                                            </TableCell>
-                                                            <TableCell>
                                                                 <div className="flex items-center gap-2 font-semibold">
                                                                     <span>
                                                                         {currency}{' '}
-                                                                        {member.totalDue.toLocaleString(undefined, {
+                                                                        {member.amountDueToday.toLocaleString(undefined, {
                                                                             minimumFractionDigits: 2,
                                                                             maximumFractionDigits: 2,
                                                                         })}
@@ -516,21 +546,33 @@ const GroupRepayment = () => {
                                                                                 variant="ghost"
                                                                                 size="icon"
                                                                                 className="h-6 w-6 text-gray-400 hover:text-primary"
-                                                                                onClick={() => handleCopyAmount(member.borrowerId, member.totalDue)}
+                                                                                onClick={() =>
+                                                                                    handleCopyAmount(
+                                                                                        member.borrowerId,
+                                                                                        member.amountDueToday,
+                                                                                    )
+                                                                                }
                                                                             >
                                                                                 <Copy className="h-3 w-3" />
                                                                             </Button>
                                                                         </TooltipTrigger>
                                                                         <TooltipContent>
-                                                                            <p>Copy total due</p>
+                                                                            <p>Copy due today</p>
                                                                         </TooltipContent>
                                                                     </Tooltip>
                                                                 </div>
                                                             </TableCell>
                                                             <TableCell>
+                                                                {currency}{' '}
+                                                                {member.totalDue.toLocaleString(undefined, {
+                                                                    minimumFractionDigits: 2,
+                                                                    maximumFractionDigits: 2,
+                                                                })}
+                                                            </TableCell>
+                                                            <TableCell>
                                                                 <Input
                                                                     type="number"
-                                                                    placeholder="0.00"
+                                                                    placeholder="Due today only"
                                                                     value={repaymentAmounts[member.borrowerId]}
                                                                     onChange={(e) => handleAmountChange(member.borrowerId, e.target.value)}
                                                                 />
